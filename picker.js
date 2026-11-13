@@ -193,6 +193,18 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
     });
   }
+  /* 抓不到行情时给一句能看懂的话：本地服务 / 线上静态站的成因完全不一样，不要混着说 */
+  function marketHintHtml() {
+    var isLocal = /^(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\])$/.test(location.hostname);
+    if (!isLocal) {
+      return '<p>线上版由浏览器直接请求东方财富公开行情接口，不经过任何中转。' +
+        '如果处在代理 / VPN 环境，<code>push2.eastmoney.com</code> 的全市场列表接口经常被拦截' +
+        '（K 线、指数接口可能仍然正常），换成直连网络或给该域名加直连规则即可。已抓到的缓存不受影响。</p>';
+    }
+    return '<p>行情经本地服务中转（server.py）获取：默认腾讯财经，失败自动切东方财富。' +
+      '请确认服务是用<b>启动.command</b>或 <code>python3 server.py</code> 起的' +
+      '（纯静态 http.server 没有中转能力），并确认网络能访问 qq.com / eastmoney。之前抓到的缓存不受影响。</p>';
+  }
   function isTradingTime() {
     var d = bjNow(), wd = d.getDay();
     if (wd === 0 || wd === 6) return false;
@@ -1128,7 +1140,9 @@
 
     var hint = el('pk-paper-hint');
     if (hint) {
-      var storeNote = API_OK === false ? ' · 数据库未连接，暂存浏览器' : ' · 已存本机数据库';
+      var storeNote = API_OK === false
+        ? (/^(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\])$/.test(location.hostname) ? ' · 数据库未连接，暂存浏览器' : ' · 线上版：记录存在本浏览器')
+        : ' · 已存本机数据库';
       hint.textContent = openCnt
         ? '持仓 ' + openCnt + ' 笔 · 浮动 ' + ppMoney(floatPnl) + '（按最新行情）· 触止损自动平仓' + storeNote
         : '点候选卡片上的「虚拟买入」按建议计划开一笔模拟仓，止损/达标自动平仓' + storeNote;
@@ -1231,7 +1245,7 @@
     if (S.error) {
       box.innerHTML =
         '<div class="pk-err"><b>数据抓取失败：' + esc(S.error) + '</b>' +
-        '<p>行情经本地服务中转（server.py）获取：默认腾讯财经，失败自动切东方财富。请确认服务是用<b>启动.command</b>或 <code>python3 server.py</code> 起的（纯静态 http.server 没有中转能力），并确认网络能访问 qq.com / eastmoney。之前抓到的缓存不受影响。</p>' +
+        marketHintHtml() +
         '<button class="pk-btn" id="pk-retry">重新抓取</button></div>';
       var b = el('pk-retry');
       if (b) b.addEventListener('click', function () { fetchMarket(); });
