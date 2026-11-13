@@ -1,0 +1,46 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 这个站是纯前端：行情走东财 JSONP 直连，持仓/建议在浏览器本地存。
+      # 只把页面资源挑出来发布，server.py 这类本地后端脚本不带上线。
+      - name: Stage site
+        run: |
+          mkdir -p _site
+          cp index.html style.css _site/
+          cp ai.js app.js data.js echarts.min.js fundamental.js live.js picker.js stock.js stocks.js _site/
+          touch _site/.nojekyll
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
