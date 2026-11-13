@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股股债利差系统 · Equity Bond Gap Terminal</title>
+<link rel="stylesheet" href="style.css?v=21">
+<link rel="icon" href="data:,">
+</head>
+<body>
+
+<aside class="side">
+  <div class="brand">
+    <div class="brand-t">股债利差</div>
+    <div class="brand-s">EQUITY · BOND · GAP</div>
+  </div>
+  <nav id="nav">
+    <button class="navi on" data-v="overview"><i>01</i>总览面板</button>
+    <button class="navi" data-v="curve"><i>02</i>利差曲线</button>
+    <button class="navi" data-v="signal"><i>03</i>建仓提示</button>
+    <button class="navi" data-v="alloc"><i>04</i>配置建议</button>
+    <button class="navi" data-v="pick"><i>05</i>选股引擎</button>
+    <button class="navi" data-v="stock"><i>06</i>个股分析</button>
+    <button class="navi" data-v="history"><i>07</i>历史复盘</button>
+  </nav>
+  <div class="side-foot">
+    <div class="live-badge on-loading" id="sf-live">
+      <i></i>
+      <div class="lb-txt"><b id="sf-live-t">获取行情中</b><span id="sf-live-s">正在连接行情源</span></div>
+    </div>
+    <div class="sf-row"><span id="sf-bond-lab">10Y 国债</span><b id="sf-bond">—</b></div>
+    <div class="sf-row"><span>行情日期</span><b id="sf-date">—</b></div>
+    <div class="sf-note" id="sf-note">—</div>
+  </div>
+</aside>
+
+<main>
+
+<!-- ============ 01 总览 ============ -->
+<section class="view on" id="v-overview">
+  <div class="vhead">
+    <h1>A股股债利差总览</h1>
+    <p class="sub">股票盈利收益率与 10 年期国债收益率之差 —— 衡量股债相对性价比。数值越高，股票相对债券越便宜。</p>
+  </div>
+
+  <div class="hero" id="hero">
+    <div class="hero-l">
+      <div class="hero-lab">沪深300 股权风险溢价 ERP</div>
+      <div class="hero-stamp" id="hero-stamp">—</div>
+      <div class="hero-num"><span id="h-erp">—</span><em>%</em></div>
+      <div class="hero-sub" id="h-sub">—</div>
+    </div>
+    <div class="hero-r">
+      <div class="gauge-wrap">
+        <div class="gauge-lab">近 10 年分位</div>
+        <div class="gauge-num" id="h-pct">—</div>
+        <div class="gauge-bar"><div class="gauge-fill" id="h-gfill"></div><div class="gauge-dot" id="h-gdot"></div></div>
+        <div class="gauge-scale"><span>0%</span><span>50%</span><span>100%</span></div>
+      </div>
+      <div class="sig" id="h-sig">—</div>
+    </div>
+  </div>
+
+  <div class="card entry-card" id="entry-overview">
+    <div class="card-h"><div><span class="eyebrow">ALLOCATION CHECK · 10Y ERP</span><h2>五指数建仓判断</h2></div><span class="hint">相对估值信号，不是短线预测</span></div>
+    <div class="entry-intro"><span class="entry-live-dot"></span><span>本提示只按指数 FED 差值 ERP（1/PE − 10Y）判断，不把 FED 比值或股息率利差混在一起；并用「利差分位 + 盈利收益率分位 + 利率归因 + 指数适用性」四项复核。双重条件成立才提示“可评估分批建仓”。</span><b id="entry-threshold-note">买入线 80 分位</b></div>
+    <div class="entry-summary" id="entry-summary"></div>
+    <div class="entry-grid" id="entry-board"></div>
+    <p class="entry-foot">默认 ERP 买入线 80、盈利端确认线 65 分位（均可调）；盈利端 65、低利率归因 70% 为本系统的审慎过滤参数，并非行业统一标准或保证有效的回测结论。即使满足，也仍需结合盈利预期、趋势、流动性及个人风险预算；历史低估不保证短期反弹。</p>
+  </div>
+
+  <div class="card" id="spark-card">
+    <div class="card-h"><h2 id="spark-title">利差走势</h2><span class="hint" id="spark-hint"></span></div>
+    <div id="chart-spark" class="chart" style="height:180px"></div>
+  </div>
+
+  <div class="card" id="attrib-card">
+    <div class="card-h"><h2>利差归因：这 5.7% 是谁给的？</h2><span class="tag">核心</span></div>
+    <div id="attrib"></div>
+  </div>
+
+  <div class="grid5" id="cards"></div>
+
+  <div class="card">
+    <div class="card-h"><h2>五个指数的利差分位对照</h2><span class="hint">同一时点，同一种利率，结论完全不同</span></div>
+    <div id="chart-rank" class="chart" style="height:300px"></div>
+    <p class="foot-note"><b>注意：分位不能跨指数比较绝对值。</b>中证500 当前利差仅 2.02%，却是 94% 分位；沪深300 有 5.74%，只有 63% 分位——因为中证500 的历史利差均值本身就接近 1%。<b>只能比各自的分位，不能比利差的高低。</b></p>
+  </div>
+</section>
+
+<!-- ============ 02 曲线 ============ -->
+<section class="view" id="v-curve">
+  <div class="vhead">
+    <h1>利差曲线</h1>
+    <p class="sub">分位决定位置，曲线决定形态。看的是「离历史中枢多远」，不是「绝对值多少」。</p>
+  </div>
+
+  <div class="toolbar">
+    <div class="seg" id="curve-idx"></div>
+    <div class="spacer"></div>
+    <label class="sel"><span>窗口</span>
+      <select id="curve-win">
+        <option value="36">近 3 年</option>
+        <option value="60">近 5 年</option>
+        <option value="120" selected>近 10 年</option>
+        <option value="0">全部（自 2016-11）</option>
+      </select>
+    </label>
+    <label class="sel"><span>债券端</span>
+      <select id="curve-bond">
+        <option value="real" selected>10年国债（实际值）</option>
+        <option value="neutral">利率中性化</option>
+      </select>
+    </label>
+    <label class="chk"><input type="checkbox" id="curve-showidx" checked><span>叠加指数点位</span></label>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h2 id="curve-title">沪深300 股权风险溢价</h2><span class="hint" id="curve-hint"></span></div>
+    <div id="chart-curve" class="chart" style="height:420px"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h2>拆开看：分子端与分母端</h2><span class="hint">堆叠带图。红色带 = 10年期国债收益率，蓝色带 = 利差，蓝带高度就是 ERP；两条线的总高度 = 盈利收益率 1/PE。</span></div>
+    <div id="chart-decomp" class="chart" style="height:300px"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h2>最近 12 期读数</h2><button class="btn" id="btn-csv">导出 CSV</button></div>
+    <div class="tablewrap"><table class="tbl" id="tbl-recent"></table></div>
+  </div>
+</section>
+
+<!-- ============ 03 分位与信号 ============ -->
+<section class="view" id="v-signal">
+  <div class="vhead">
+    <h1>建仓提示</h1>
+    <p class="sub">不是看到“利差高”就自动买入。本页只按 FED 差值 ERP（1/PE − 10年国债）判断宽基指数，不混用比值或股息率差；并要求盈利收益率分位有支撑，低利率单边抬高利差时会降级提示。</p>
+  </div>
+
+  <div class="card entry-focus" id="entry-focus"></div>
+  <div class="card">
+    <div class="card-h"><div><span class="eyebrow">THRESHOLD CONTROL</span><h2>分位阈值尺</h2></div><span class="hint">80 / 40 为经验线，不代表回测保证</span></div>
+    <div class="entry-key"><span class="key-buy">● 双确认分批评估</span><span class="key-watch">● 观察，不追</span><span class="key-no">● 暂不新增 / 指标不适用</span><span class="entry-key-hint">拖动下方滑块可自定义买入、卖出和盈利端确认线</span></div>
+    <div class="ruler" id="ruler"></div>
+    <div class="thr-row" id="thr-row"></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <div class="card-h"><h2>当前信号</h2></div>
+      <div id="sig-out"></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h2>多窗口分位</h2><span class="hint">同一读数，窗口不同结论可能相反</span></div>
+      <div id="win-tbl"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><div><span class="eyebrow">INDEX COMPARISON</span><h2>五指数建仓判断矩阵</h2></div><span class="hint">同一窗口，同一门槛，按指数自身历史比较</span></div>
+    <div class="tablewrap"><table class="tbl entry-table" id="entry-matrix"></table></div>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h2>全指数 × 全窗口分位矩阵</h2></div>
+    <div class="tablewrap"><table class="tbl" id="tbl-matrix"></table></div>
+  </div>
+</section>
+
+<!-- ============ 04 配置建议 ============ -->
+<section class="view" id="v-alloc">
+  <div class="vhead">
+    <h1>配置建议</h1>
+    <p class="sub">利差不是择时器，是仓位刻度尺。它告诉你该重仓还是轻仓，不告诉你下周涨还是跌。</p>
+  </div>
+
+  <div class="toolbar">
+    <div class="seg" id="risk-seg">
+      <button class="on" data-r="conservative">保守型</button>
+      <button data-r="balanced">均衡型</button>
+      <button data-r="aggressive">进取型</button>
+    </div>
+    <div class="spacer"></div>
+    <span class="hint">风险偏好只改变仓位斜率，不改变信号方向</span>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <div class="card-h"><h2>当前建议仓位</h2></div>
+      <div id="alloc-out"></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h2>仓位刻度尺</h2><span class="hint">分位 → 权益仓位</span></div>
+      <div id="chart-alloc" class="chart" style="height:300px"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h2>历史检验：分位 → 未来 12 个月收益</h2><span class="hint" id="bt-hint"></span></div>
+    <div id="chart-bt" class="chart" style="height:320px"></div>
+    <div class="tablewrap"><table class="tbl" id="tbl-bt"></table></div>
+  </div>
+
+  <div class="card warn">
+    <div class="card-h"><h2>三条使用纪律</h2></div>
+    <div class="rules">
+      <div class="rule"><b>01</b><p>只用分位，不用绝对值。利率中枢会漂移，2014 年的 8.2% 和今天的 5.7% 不是一回事。</p></div>
+      <div class="rule"><b>02</b><p>严入宽出。买入等 80 分位，卖出设在 40 分位。等不到就不买，这本身就是收益。</p></div>
+      <div class="rule"><b>03</b><p>先看归因。如果利差高是因为利率低，那它是「分母幻觉」，不是「分子便宜」。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 05 选股引擎 ============ -->
+<section class="view" id="v-pick">
+  <div class="vhead">
+    <h1>每日选股引擎</h1>
+    <p class="sub">每次进入都重新抓全市场实时数据：先判断今天是什么行情（进攻 / 均衡 / 防守），再从 5500+ 只 A 股里现算六维分数，挑出未来 1–2 个交易日最有机会的几只。名单随行情变化，不预设固定标的，也没有一处是手敲的分数。</p>
+  </div>
+
+  <div class="pk-toolbar">
+    <button class="pk-btn pk-btn-main" id="pk-refresh">刷新全市场数据</button>
+    <span class="pk-tool-hint">进入页面自动抓取；数据缓存 3 分钟，盘中每 4 分钟自动更新</span>
+    <span class="pk-tool-src"><i></i>东方财富公开行情 · 本地计算</span>
+  </div>
+
+  <!-- 今日行情判定 -->
+  <div class="card pk-statecard" id="pk-state"></div>
+
+  <!-- 今日候选 -->
+  <div class="card">
+    <div class="card-h"><div><span class="eyebrow">TODAY'S SHORTLIST</span><h2>今日候选 · 未来 1–2 个交易日</h2></div>
+      <span class="hint" id="pk-top-hint">按当天行情自适应排序，默认取综合分前 N 名</span></div>
+    <div class="pk-grid" id="pk-top"></div>
+  </div>
+
+  <!-- AI 复核 -->
+  <div class="card pk-aicard" id="pk-ai"></div>
+
+  <!-- 每日建议 -->
+  <div class="card" id="pk-advice-card">
+    <div class="card-h"><div><span class="eyebrow">DAILY ADVICE</span><h2>每日建议</h2></div>
+      <span class="hint" id="pk-advice-hint">建议随行情生成，按交易日存档到本机数据库</span></div>
+    <div id="pk-advice"></div>
+  </div>
+
+  <!-- 模拟持仓 -->
+  <div class="card" id="pk-paper-card">
+    <div class="card-h"><div><span class="eyebrow">PAPER TRADING</span><h2>模拟持仓</h2></div>
+      <span class="hint" id="pk-paper-hint">点候选卡片上的「虚拟买入」按建议计划开一笔模拟仓，止损/达标自动平仓</span></div>
+    <div id="pk-paper"></div>
+  </div>
+
+  <!-- 参数 -->
+  <div class="card">
+    <div class="card-h"><div><span class="eyebrow">PARAMETERS</span><h2>模型参数</h2></div>
+      <span class="hint">改权重、门槛、行业后立即在全市场重算，不会重新下载数据</span></div>
+    <div id="pk-tuner"></div>
+  </div>
+
+  <!-- 候选池 -->
+  <div class="card">
+    <div class="card-h"><h2>全市场候选池</h2><span class="hint" id="pk-pool-hint"></span></div>
+    <div class="tablewrap"><table class="tbl pk-pool" id="tbl-pk-pool"></table></div>
+    <p class="foot-note">排序：点表头任意列。六维分数均为 0–100，由当日原始数据按分段规则算出，不是人工填写。表中「主力净额」为当日主力资金净流入（东方财富口径），「60日」「换手」「量比」为当日实时值。</p>
+  </div>
+
+  <!-- 历史跟踪 -->
+  <div class="card">
+    <div class="card-h"><h2>每日推荐跟踪</h2><span class="hint">每天的建议名单存在本机，回来看当时的判断对不对</span></div>
+    <div id="pk-hist"></div>
+  </div>
+
+  <!-- 说明 -->
+  <div class="card warn">
+    <div class="card-h"><h2>模型说明、局限与免责</h2></div>
+    <div class="rules">
+      <div class="rule"><b>01</b><p><b>候选池是全市场，不是固定几只。</b>每次刷新重新抓取沪深主板、创业板、科创板共 5500+ 只，剔除 ST/退市、新股次新、停牌、成交额不足 1.5 亿、换手过热、当日破位和已封涨停的标的。</p></div>
+      <div class="rule"><b>02</b><p><b>先判行情，再选股。</b>用涨跌家数、涨停跌停、指数表现、两市成交额合成「市场温度」，≥64 为进攻（重资金与量价）、42–64 为均衡、&lt;42 为防守（重资金与质量，只选 3 只）。所以每天推出来的名单会不一样。</p></div>
+      <div class="rule"><b>03</b><p><b>六维分数是算出来的。</b>资金动能看主力净额占成交额比重；量价强度看涨幅、换手、量比与收盘位置；位置空间看近 60 日与年内涨幅；行业动能看所属行业当日均值排名；流动性看成交额与市值；质量安全用 ROE、净利增速、PE 排雷。权重可调，调完立即重算。</p></div>
+      <div class="rule"><b>04</b><p><b>这是短线工具，不是价值投资。</b>持有周期设为 1–2 个交易日，止损 −4.5% 左右，目标 +5.5% / +9%。它筛的是「这两天资金和量能最配合的票」，不判断公司长期好坏——长期判断请用「个股分析」页。</p></div>
+      <div class="rule"><b>05</b><p><b>分数高不等于会涨。</b>模型只看当日可观测的量价资金数据，无法预知隔夜消息、政策、外盘和大股东行为；涨停、闪崩、停牌都可能让任何信号失效。所有价位只是纪律参考，不是承诺。</p></div>
+      <div class="rule"><b>06</b><p><b>数据与免责。</b>行情经本地服务中转：默认使用腾讯财经公开行情（页面右上角标明当前数据源），失败时自动切换东方财富接口。腾讯源覆盖沪深主板与创业板（不含科创板），行业维度按「主板/创业板」板块近似，当日最高最低价缺失时收盘位置按中性处理。记录写入本机 SQLite（ebgap.db），不经过任何第三方服务器。本页仅用于研究与自我训练，不构成投资建议，据此操作风险自负。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 07 历史复盘 ============ -->
+<section class="view" id="v-history">
+  <div class="vhead">
+    <h1>历史复盘</h1>
+    <p class="sub">利差极值处的市场，后来发生了什么。本页复盘 A 股六个经典时段的利差信号、宏观背景、后续走势与收益测算，并统计分位 → 收益映射。注意：极值可以持续很久，也可以更极端。</p>
+  </div>
+
+  <!-- 指数切换 -->
+  <div class="toolbar">
+    <div class="seg" id="hist-idx"></div>
+    <div class="spacer"></div>
+    <span class="hint">切换指数查看不同宽基的历史复盘</span>
+  </div>
+
+  <!-- 全景 ERP 曲线 + 关键时点标注 -->
+  <div class="card">
+    <div class="card-h"><h2 id="hist-curve-title">沪深300 ERP 全景与关键时点</h2><span class="hint">标注六次经典底部/顶部，虚线为均值与±1σ</span></div>
+    <div id="chart-hist-curve" class="chart" style="height:380px"></div>
+  </div>
+
+  <!-- 经典时段详细复盘 -->
+  <div class="card">
+    <div class="card-h"><div><span class="eyebrow">DETAILED CASE STUDY</span><h2>六次经典时段复盘</h2></div><span class="hint">点击下方时段卡片切换详情</span></div>
+    <div class="hist-tabs" id="hist-tabs"></div>
+    <div id="hist-detail"></div>
+  </div>
+
+  <!-- 分位 → 收益映射 -->
+  <div class="card">
+    <div class="card-h"><div><span class="eyebrow">QUANTILE → RETURN</span><h2>利差分位与未来收益映射</h2></div><span class="hint" id="hist-bt-hint"></span></div>
+    <div id="chart-hist-bt" class="chart" style="height:320px"></div>
+    <div class="tablewrap"><table class="tbl" id="tbl-hist-bt"></table></div>
+    <p class="foot-note">基于真实月度序列的粗检验：每月末计算滚动分位（窗口最长 120 个月），统计其后 3 / 6 / 12 / 24 个月指数收益。指数收盘价取自东方财富月K，PE 取自蛋卷基金，均为真实数据；序列自 2016-11 起，样本量少于 10 年，结论需谨慎。</p>
+  </div>
+
+  <!-- 关键时点对照表 -->
+  <div class="card">
+    <div class="card-h"><h2>关键时点速览</h2><span class="hint" id="hist-table-hint"></span></div>
+    <div class="tablewrap"><table class="tbl" id="tbl-history"></table></div>
+  </div>
+
+  <!-- 极值分布 -->
+  <div class="card">
+    <div class="card-h"><h2>ERP 极值分布</h2><span class="hint" id="hist-dist-hint"></span></div>
+    <div id="chart-dist" class="chart" style="height:280px"></div>
+  </div>
+
+  <!-- 教训与启示 -->
+  <div class="card warn">
+    <div class="card-h"><h2>复盘教训：六条经验</h2></div>
+    <div class="rules">
+      <div class="rule"><b>01</b><p>极值可以持续很久。2014 年 6 月利差就到 8%，但牛市直到 11 月才启动，中间磨了 5 个月。</p></div>
+      <div class="rule"><b>02</b><p>利差见顶 ≠ 指数见底。2018 年利差高点在 10 月，指数底在 12 月，滞后 2 个月。</p></div>
+      <div class="rule"><b>03</b><p>顶部信号更弱。2015 年和 2021 年利差都跌到 2% 以下，但持续时间和回落速度完全不同。</p></div>
+      <div class="rule"><b>04</b><p>分位越高、未来收益越好，但胜率不等于 100%。高分位区间仍有约 15%-25% 的样本录得负收益。</p></div>
+      <div class="rule"><b>05</b><p>低利率时代的利差被系统性抬高。2014 年和 2024 年的同等分位，隐含的风险补偿完全不同。</p></div>
+      <div class="rule"><b>06</b><p>利差只告诉你「贵不贵」，不告诉你「何时涨」。需要结合盈利趋势、流动性、政策方向交叉验证。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 06 个股分析 ============ -->
+<section class="view" id="v-stock">
+  <div class="vhead">
+    <h1>个股分析</h1>
+    <p class="sub">输入 A 股代码，先做估值、盈利质量、成长、技术、资金、风险六维体检，再补一份公司基本面档案（做什么、行业地位、股东与管理层、所在地、前景与基本面评价），最后给出可执行的买卖建议与关键价位。</p>
+  </div>
+
+  <div class="card sa-search">
+    <div class="sa-input-row">
+      <input id="sa-code" class="sa-input" type="text" inputmode="numeric" maxlength="6"
+             placeholder="输入 6 位股票代码，如 600519" autocomplete="off" spellcheck="false">
+      <button id="sa-go" class="sa-go" type="button">开始分析</button>
+    </div>
+    <div class="sa-quick" id="sa-quick"></div>
+    <p class="sa-search-hint">支持沪深主板、创业板、科创板。数据取自东方财富公开行情与财报接口，全部在本机浏览器内计算。</p>
+  </div>
+
+  <div id="sa-loading" class="sa-loading" hidden>
+    <span class="sa-spin"></span><span id="sa-loading-txt">正在拉取行情、财报与估值历史…</span>
+  </div>
+
+  <div id="sa-error" class="card sa-error" hidden></div>
+
+  <div id="sa-result" hidden></div>
+</section>
+
+</main>
+
+<script src="echarts.min.js"></script>
+<script src="data.js?v=2"></script>
+<script src="stocks.js?v=4"></script>
+<script src="live.js?v=3"></script>
+<script src="stock.js?v=19"></script>
+<script src="fundamental.js?v=7"></script>
+<script src="picker.js?v=8"></script>
+<script src="ai.js?v=3"></script>
+<script src="app.js?v=19"></script>
+</body>
+</html>

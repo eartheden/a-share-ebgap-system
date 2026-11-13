@@ -1,0 +1,17 @@
+# 本地数据库（个人虚拟持仓/建议记录）
+ebgap.db
+ebgap.db-journal
+ebgap.db-wal
+
+# 行情快照缓存
+data/*.json
+!data/README.md
+
+# 系统与编辑器
+.DS_Store
+node_modules/
+__pycache__/
+*.pyc
+
+# 本地 AI Key 配置
+.ebgap-ai.json
