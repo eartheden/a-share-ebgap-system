@@ -76,6 +76,8 @@
     sort: { k: 'total', dir: -1 },
     hist: [],
     paper: [],          // 模拟持仓（虚拟买入，存本机 SQLite）
+    paperLoaded: false,     // 持仓是否已从数据库加载完成（防止 tick 竞态）
+    paperEvalPending: false,// 加载未完成时的待执行 tick 标记
     advice: null,       // 每日建议存档（来自数据库）
     ai: null,           // AI 复核结果 { byCode, at, model, plan }
     expanded: {},       // 展开的理由卡片
@@ -879,6 +881,7 @@
      localStorage 只留一份快照做离线兜底；服务不可用时退回纯本地模式。
      首次连接时若库是空的而本地有旧记录，自动把旧记录迁移入库。 */
   var PKEY = 'ebgap.paper.v1';
+  var MIGRATED_KEY = 'ebgap.paper.migrated.v1';   // 迁移完成标记，避免每次刷新重跑
   var PAPER_CAPITAL = 100000;
 
   function localPaperSnapshot() {
@@ -921,20 +924,40 @@
     /* 先用本地快照立即渲染，再向数据库校对 */
     S.paper = localPaperSnapshot();
     apiGet('/api/paper/list').then(function (res) {
-      if (!res || !res.ok) return;
+      if (!res || !res.ok) { markPaperLoaded(); return; }
       API_OK = true;
-      if (!res.trades.length && S.paper.length) {
-        migratePaper(S.paper.slice());
+      var migrated = false;
+      try { migrated = localStorage.getItem(MIGRATED_KEY) === '1'; } catch (e) { /* ignore */ }
+      if (!res.trades.length && S.paper.length && !migrated) {
+        migratePaper(S.paper.slice());   // migratePaper 内部会 markPaperLoaded
         return;
       }
       S.paper = res.trades.map(fromServerTrade);
       savePaper();
       renderPaper();
       renderTop();
-    }).catch(function () { API_OK = false; });
+      markPaperLoaded();
+    }).catch(function () {
+      API_OK = false;
+      markPaperLoaded();
+    });
   }
 
-  /* 把 localStorage 时代的旧记录逐条迁进数据库（只迁一次） */
+  /* Bug2：paperEval 必须等持仓从数据库加载完再跑，
+     否则会用尚未 load 的 S.paper（本地旧快照/空数组）去 tick，
+     可能用过期价格覆盖数据库里的现价。 */
+  function markPaperLoaded() {
+    S.paperLoaded = true;
+    if (S.paperEvalPending) {
+      S.paperEvalPending = false;
+      paperEval();
+    }
+  }
+
+  /* 把 localStorage 时代的旧记录逐条迁进数据库（只迁一次）
+     幂等要点：buy 可能返回 duplicate（例如上次 close 超时后重试），
+     此时不能简单跳过——如果库里那条仍是 open，必须补一次 close，
+     否则会留下一条永远平不掉的仓位。只有库里已是 closed 才算迁移完成。 */
   function migratePaper(local) {
     var open = local.filter(function (p) { return p.status === 'open'; });
     var closed = local.filter(function (p) { return p.status === 'closed'; });
@@ -947,7 +970,9 @@
     closed.forEach(function (p) {
       chain = chain.then(function () {
         return apiPost('/api/paper/buy', toServerTrade(p)).then(function (res) {
-          if (!res || !res.ok || res.duplicate || !res.trade) return null;
+          if (!res || !res.ok || !res.trade) return null;
+          // 服务端幂等命中：库里已存在该 (code, buy_at)。仅当它仍是 open 时才补平仓。
+          if (res.trade.status === 'closed') return null;
           return apiPost('/api/paper/close', {
             id: res.trade.id, price: p.closePrice || p.buyPrice,
             reason: p.closeReason || '历史记录迁移',
@@ -962,9 +987,17 @@
       if (res && res.ok) {
         S.paper = res.trades.map(fromServerTrade);
         savePaper();
+        // 只有库里已能读回记录才算迁移成功，写标记防止重复跑
+        try { localStorage.setItem(MIGRATED_KEY, '1'); } catch (e) { /* ignore */ }
       }
       renderPaper();
       renderTop();
+      markPaperLoaded();
+    }).catch(function () {
+      // 迁移链任何一步失败也不能把 paperLoaded 永远卡在 false，
+      // 否则 paperEval 会一直 pending，自动止损/止盈彻底失效。
+      API_OK = false;
+      markPaperLoaded();
     });
   }
 
@@ -990,7 +1023,9 @@
     var shares = Math.floor(capital / s.price / 100) * 100;
     if (shares < 100) shares = 100;   // 高价股至少一手
     var p = {
-      id: Date.now(), code: s.code, name: s.name, ind: s.ind,
+      /* Bug5：本地临时 id 用负数空间，与数据库自增正整数 id 隔离。
+         服务端返回真实 id 后会被替换（见下方 res.trade.id）。 */
+      id: -Date.now(), code: s.code, name: s.name, ind: s.ind,
       buyPrice: s.price, buyDate: S.quoteDate || ymd(bjNow()), buyAt: Date.now(),
       shares: shares, amt: shares * s.price,
       suggestLow: s.plan.buyLow, suggestHigh: s.plan.buyHigh,
@@ -1040,7 +1075,25 @@
     var p = null;
     S.paper.forEach(function (x) { if (x.id === id && x.status === 'open') p = x; });
     if (!p) return;
-    var cur = rawPriceOf(p.code) || p.curPrice || p.buyPrice;
+    /* Bug5：负 id 是还没同步完的本地临时记录，服务端不存在，
+       直接平仓会导致「本地已平、数据库仍 open」的再开仓温床。 */
+    if (id < 0 && API_OK !== false) {
+      alert('这笔仓位正在同步到数据库，请稍等 1 秒后再卖出。');
+      return;
+    }
+    // API_OK===false 的离线模式：负 id 是纯本地记录，走本地平仓分支即可
+    /* Bug4：实时价拿不到时，旧代码静默回退到 curPrice/buyPrice，
+       盈亏会用一个过时价算出来且用户毫无察觉。改为明确告知并让用户确认。 */
+    var live = rawPriceOf(p.code);
+    var cur = live;
+    if (!(cur > 0)) {
+      var fallback = (p.curPrice > 0) ? p.curPrice : p.buyPrice;
+      var label = (p.curPrice > 0) ? '上次记录的现价 ' + fx(fallback, 2) : '买入价 ' + fx(fallback, 2);
+      if (!confirm('【' + p.name + '】当前取不到实时行情，无法按最新价卖出。\n\n' +
+                   '可选：按' + label + '平仓（盈亏可能不准确），或取消后稍等行情恢复再卖。\n\n' +
+                   '确定按' + label + '平仓吗？')) return;
+      cur = fallback;
+    }
     if (API_OK !== false) {
       apiPost('/api/paper/close', {
         id: id, price: cur, reason: reason || '手动平仓',
@@ -1074,6 +1127,7 @@
 
   /* 每次行情更新后核对持仓纪律；数据不是最新的时不动作 */
   function paperEval() {
+    if (!S.paperLoaded) { S.paperEvalPending = true; return; }
     if (!S.raw || !S.paper || !S.paper.length) return;
     if (API_OK !== false) {
       var quotes = {};
@@ -1213,13 +1267,33 @@
     var clr = box.querySelector('#pk-paper-clear');
     if (clr) clr.addEventListener('click', function () {
       if (!confirm('确定清空全部模拟持仓与历史记录？数据库中的记录会一并删除，此操作不可恢复。')) return;
-      S.paper = [];
-      savePaper();
-      renderPaper();
-      renderTop();
-      if (API_OK !== false) {
-        apiPost('/api/paper/clear', {}).catch(function () { /* 下次加载会再校对 */ });
+      /* Bug3：先删数据库、成功了再清本地。
+         旧实现先清本地再异步删库，POST 失败被静默吞掉，
+         用户以为清干净了，刷新后记录全部复活。 */
+      function applyLocal() {
+        S.paper = [];
+        savePaper();
+        renderPaper();
+        renderTop();
       }
+      if (API_OK === false) { applyLocal(); return; }   // 离线模式：只有本地
+      var btn = this;
+      btn.disabled = true;
+      btn.textContent = '清空中…';
+      apiPost('/api/paper/clear', {}).then(function (res) {
+        btn.disabled = false;
+        btn.textContent = '清空记录';
+        if (!res || !res.ok) {
+          alert('清空失败：数据库未确认删除，本地记录已保留。请检查本地服务后重试。');
+          return;
+        }
+        applyLocal();
+      }).catch(function () {
+        btn.disabled = false;
+        btn.textContent = '清空记录';
+        API_OK = false;
+        alert('清空失败：无法连接本地数据库，本地记录已保留（未误删）。');
+      });
     });
   }
 

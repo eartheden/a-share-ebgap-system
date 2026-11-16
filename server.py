@@ -429,7 +429,14 @@ def paper_list():
 
 
 def paper_buy(d):
-    """开一笔模拟仓。同一代码已有持仓时拒绝重复开仓，返回已有记录。"""
+    """开一笔模拟仓。
+
+    幂等规则（防止迁移/重试产生重复记录）：
+      1) 同一 code 已有 open 持仓 → 返回已有，不重复开仓；
+      2) 迁移的历史记录带 buy_at，若库里已存在相同 (code, buy_at) 的记录
+         （无论 open 还是 closed）→ 返回已有，不重复插入。
+    这样即便 close 请求超时后前端重试迁移，也不会再建一条重复仓。
+    """
     code = str(d.get('code') or '').strip()
     price = d.get('buy_price')
     if not code or not isinstance(price, (int, float)) or price <= 0:
@@ -437,6 +444,10 @@ def paper_buy(d):
     with db_conn() as c:
         dup = c.execute(
             'SELECT * FROM paper_trades WHERE code = ? AND status = \'open\'', (code,)).fetchone()
+        if not dup and d.get('buy_at'):
+            dup = c.execute(
+                'SELECT * FROM paper_trades WHERE code = ? AND buy_at = ? ORDER BY id LIMIT 1',
+                (code, d.get('buy_at'))).fetchone()
         if dup:
             return {'ok': True, 'duplicate': True, 'trade': rows_to_dicts([dup])[0]}
         cur = c.execute('''
