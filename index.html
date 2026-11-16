@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>A股股债利差系统 · Equity Bond Gap Terminal</title>
 <link rel="stylesheet" href="style.css?v=21">
+<link rel="stylesheet" href="limitup.css?v=1">
+<link rel="stylesheet" href="theme.css?v=1">
 <link rel="icon" href="data:,">
 </head>
 <body>
@@ -22,6 +24,7 @@
     <button class="navi" data-v="pick"><i>05</i>选股引擎</button>
     <button class="navi" data-v="stock"><i>06</i>个股分析</button>
     <button class="navi" data-v="history"><i>07</i>历史复盘</button>
+    <button class="navi" data-v="limitup"><i>08</i>涨停地图</button>
   </nav>
   <div class="side-foot">
     <div class="live-badge on-loading" id="sf-live">
@@ -373,6 +376,9 @@
   <div id="sa-result" hidden></div>
 </section>
 
+<!-- ============ 08 涨停地图 ============ -->
+<section class="view" id="v-limitup"></section>
+
 </main>
 
 <script src="echarts.min.js"></script>
@@ -383,6 +389,7 @@
 <script src="fundamental.js?v=7"></script>
 <script src="picker.js?v=9"></script>
 <script src="ai.js?v=3"></script>
-<script src="app.js?v=19"></script>
+<script src="limitup.js?v=2"></script>
+<script src="app.js?v=20"></script>
 </body>
 </html>

@@ -1129,12 +1129,26 @@
   function renderStock() {
     if (window.EB_STOCK && typeof window.EB_STOCK.render === 'function') window.EB_STOCK.render();
   }
+  /* 涨停热点数据地图：静态复盘页，模块自渲染，这里只做入口委托 */
+  function renderLimitUp() {
+    var v = document.getElementById('v-limitup');
+    if (window.EB_LIMITUP && typeof window.EB_LIMITUP.render === 'function') {
+      window.EB_LIMITUP.render();
+      return;
+    }
+    if (v && !v.dataset.built) {
+      v.innerHTML = '<div class="card"><div class="card-h"><h2>涨停地图脚本未加载</h2></div>' +
+        '<p class="foot-note">请确认 limitup.js 与 limitup.css 与 index.html 在同一目录，然后刷新页面。</p></div>';
+      v.dataset.built = '1';
+    }
+  }
   var RENDER = {
     overview: renderOverview, curve: renderCurve, signal: renderSignal,
     alloc: renderAlloc,
     pick: renderPickWrap,
     stock: renderStock,
-    history: renderHistory
+    history: renderHistory,
+    limitup: renderLimitUp
   };
   var DONE = {};
   function show(v) {

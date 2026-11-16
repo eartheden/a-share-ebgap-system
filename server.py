@@ -268,6 +268,8 @@ class Handler(SimpleHTTPRequestHandler):
                     return self._json(market_list_payload(qs))
                 if self.path.startswith('/api/market/index'):
                     return self._json(market_index_payload(qs))
+                if self.path.startswith('/api/market/limitup'):
+                    return self._json(limitup_snapshot_payload())
                 return self._json({'ok': False, 'error': 'unknown market endpoint'}, 404)
             except Exception as e:  # noqa: BLE001
                 return self._json({'ok': False, 'error': '行情获取失败：%s' % e}, 502)
@@ -903,20 +905,159 @@ def market_index_payload(qs):
     return _tencent_index_payload()
 
 
+# ============================================================
+# 涨停地图 · 全市场实时聚合接口
+# 一次请求返回涨跌家数 / 涨停跌停名单 / 涨跌幅分布 / 行业资金 / 指数。
+# 所有数字由实时行情快照现算，前端不再内置任何写死常量。
+# 口径说明：快照无逐笔盘口，故「封单额」不可得，改用主力净流入（f62）
+# 衡量资金强度；连板数同理无历史 K 线，不做编造，按涨幅分层展示。
+# ============================================================
+_LIMITUP_TTL = 20  # 秒；与行情源缓存错开，保证刷新有感知
+_limitup_cache = {'at': 0, 'payload': None}
+
+
+def _limit_board(code, name):
+    """按板块返回涨停幅度阈值（%）。ST 5%，科创/创业 20%，北交 30%，其余 10%。"""
+    name = name or ''
+    if 'ST' in name.upper():
+        return 5.0
+    c = str(code)
+    if c[:2] in ('68', '30'):
+        return 20.0
+    if c[:1] in ('8', '4', '9'):
+        return 30.0
+    return 10.0
+
+
+def limitup_snapshot_payload():
+    now = time.time()
+    if _limitup_cache['payload'] and now - _limitup_cache['at'] < _LIMITUP_TTL:
+        out = dict(_limitup_cache['payload'])
+        out['cached'] = True
+        return out
+
+    rows, total = tencent_snapshot()
+
+    up = down = flat = 0
+    lu, ld = [], []
+    dist = {'limitUp': 0, 'gt7': 0, '5to7': 0, '2to5': 0, '0to2': 0,
+            'flat': 0, '0to2dn': 0, '2to5dn': 0, '5to7dn': 0, 'lt7dn': 0, 'limitDown': 0}
+    amount = 0.0
+
+    for r in rows:
+        pct = r.get('f3')
+        if not isinstance(pct, (int, float)):
+            continue
+        amount += _f(r.get('f6'))
+        if pct > 0.005:
+            up += 1
+        elif pct < -0.005:
+            down += 1
+        else:
+            flat += 1
+
+        thr = _limit_board(r.get('f12'), r.get('f14'))
+        is_lu = pct >= thr - 0.15
+        is_ld = pct <= -thr + 0.15
+        if is_lu:
+            dist['limitUp'] += 1
+        elif is_ld:
+            dist['limitDown'] += 1
+        elif pct > 7:
+            dist['gt7'] += 1
+        elif pct > 5:
+            dist['5to7'] += 1
+        elif pct > 2:
+            dist['2to5'] += 1
+        elif pct > 0:
+            dist['0to2'] += 1
+        elif pct == 0:
+            dist['flat'] += 1
+        elif pct > -2:
+            dist['0to2dn'] += 1
+        elif pct > -5:
+            dist['2to5dn'] += 1
+        elif pct > -7:
+            dist['5to7dn'] += 1
+        else:
+            dist['lt7dn'] += 1
+
+        item = {
+            'code': r.get('f12'), 'name': r.get('f14'),
+            'price': _f(r.get('f2')), 'pct': pct,
+            'turnover': _f(r.get('f8')), 'fcap': _f(r.get('f21')) / 1e8,
+            'amount': _f(r.get('f6')) / 1e8, 'inflow': _f(r.get('f62')) / 1e8,
+            'ind': r.get('f100') or '其他', 'board': thr,
+        }
+        if is_lu:
+            lu.append(item)
+        if is_ld:
+            ld.append(item)
+
+    lu.sort(key=lambda x: (-x['pct'], -x['inflow']))
+    ld.sort(key=lambda x: (x['pct'], x['inflow']))
+
+    # 行业（板块）资金：按 f100 聚合涨停数与主力净流入
+    ind_map = {}
+    for r in rows:
+        key = r.get('f100') or '其他'
+        a = ind_map.setdefault(key, {'name': key, 'n': 0, 'lu': 0, 'inflow': 0.0, 'pctSum': 0.0, 'cnt': 0})
+        a['n'] += 1
+        a['inflow'] += _f(r.get('f62')) / 1e8
+        if isinstance(r.get('f3'), (int, float)):
+            a['pctSum'] += r['f3']
+            a['cnt'] += 1
+    for d in lu:
+        if d['ind'] in ind_map:
+            ind_map[d['ind']]['lu'] += 1
+    sectors = [dict(v, pct=(v['pctSum'] / v['cnt'] if v['cnt'] else 0))
+               for v in ind_map.values() if v['n'] >= 3]
+    sectors.sort(key=lambda x: -x['inflow'])
+
+    # 资金净流入 TOP（替代不可得的封单额）
+    inflow_top = sorted(
+        [{'code': r.get('f12'), 'name': r.get('f14'), 'pct': _f(r.get('f3')),
+          'inflow': _f(r.get('f62')) / 1e8, 'fcap': _f(r.get('f21')) / 1e8,
+          'ind': r.get('f100') or '其他'}
+         for r in rows if isinstance(r.get('f3'), (int, float)) and r['f3'] > 0],
+        key=lambda x: -x['inflow'])[:12]
+
+    payload = {
+        'ok': True, 'at': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now)),
+        'ts': int(now), 'src': 'tencent', 'cached': False,
+        'total': total, 'covered': len(rows),
+        'up': up, 'down': down, 'flat': flat,
+        'limitUp': len(lu), 'limitDown': len(ld),
+        'upRatio': round(up / max(1, up + down + flat) * 100, 1),
+        'amount': amount / 1e8, 'dist': dist,
+        'list': lu, 'downList': ld[:12],
+        'sectors': sectors[:12], 'inflowTop': inflow_top,
+    }
+    _limitup_cache.update({'at': now, 'payload': payload})
+    return payload
+
+
 def main():
     port = DEFAULT_PORT
     if '--port' in sys.argv:
         port = int(sys.argv[sys.argv.index('--port') + 1])
+    # 云端发布：平台把端口塞进 PORT 环境变量，并要求监听 0.0.0.0。
+    # 本机直接运行时不设 PORT，仍是 127.0.0.1:8899，行为跟以前完全一致。
+    env_port = os.environ.get('PORT')
+    env_host = os.environ.get('HOST')
+    if env_port:
+        port = int(env_port)
+    host = env_host or ('0.0.0.0' if env_port else '127.0.0.1')
     db_init()
     try:
-        srv = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+        srv = ThreadingHTTPServer((host, port), Handler)
     except OSError as e:
-        print('启动失败：端口 %d 已被占用（%s）' % (port, e))
+        print('启动失败：%s:%d 无法监听（%s）' % (host, port, e))
         print('可能服务已经在跑了，先试：http://127.0.0.1:%d/' % port)
         print('换一个端口：python3 server.py --port 8900')
         sys.exit(1)
-    print('A股股债利差系统 · 本地服务已启动')
-    print('  地址：http://127.0.0.1:%d/' % port)
+    print('A股股债利差系统 · 服务已启动')
+    print('  地址：http://%s:%d/' % (host, port))
     print('  AI 状态：%s' % ('已配置 ' + status_payload()['provider_label'] if status_payload()['configured'] else '未配置（页面内粘贴 Key 即可）'))
     print('  配置文件：%s' % CONF)
     print('  数据库：%s（模拟持仓 + 每日建议）' % DB)

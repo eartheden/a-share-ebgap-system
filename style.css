@@ -1231,3 +1231,12 @@ main{width:min(100%,1600px);max-width:1600px;margin:0 auto;padding:28px clamp(18
 .pk-advice-head i{display:block;font-style:normal;font-size:10px;color:var(--ink4);letter-spacing:.5px;margin-bottom:3px}
 .pk-advice-head b{font-size:14px;font-weight:600}
 .pk-advice-note{font-size:11.5px;color:var(--ink3);line-height:1.7;margin:-4px 0 10px;padding:8px 12px;background:var(--warnl);border-radius:8px}
+
+/* ===== 修正：顶栏品牌区英文副标与导航重叠（brand 改为两行网格） ===== */
+@media(min-width:761px){
+  .side .brand{display:grid;grid-template-columns:36px minmax(0,1fr);grid-template-rows:auto auto;
+    column-gap:11px;row-gap:1px;align-content:center}
+  .side .brand:before{grid-column:1;grid-row:1/span 2}
+  .side .brand-t{grid-column:2;grid-row:1;line-height:1.25}
+  .side .brand-s{grid-column:2;grid-row:2;margin-top:0;line-height:1.2}
+}

@@ -1,0 +1,272 @@
+/* ============================================================
+   08 · 涨停热点数据地图  Limit-Up Sector Atlas
+   仅作用于 #v-limitup，避免影响站内其它模块
+   ============================================================ */
+#v-limitup{
+  --lu-red:#b23a26; --lu-red2:#d1502f; --lu-redl:#fbeee9;
+  --lu-grn:#1a7f5a; --lu-grnl:#e8f4ee;
+  --lu-paper:#faf8f3; --lu-paper2:#f3efe6;
+  --lu-line:#e0dbd0; --lu-ink:#14161a; --lu-ink2:#4a515c; --lu-ink3:#8b929c;
+  --lu-gold:#a8761c;
+  --lu-serif:"Songti SC","Noto Serif SC","Source Han Serif SC",Georgia,"Times New Roman",serif;
+}
+#v-limitup .vhead h1{font-family:var(--lu-serif);letter-spacing:0}
+
+/* ---------- 展板封面 ---------- */
+.lu-cover{
+  position:relative;background:
+    radial-gradient(120% 90% at 88% 0%,#fdf3e9 0%,rgba(253,243,233,0) 58%),
+    linear-gradient(160deg,#fbf9f4 0%,#f4efe4 100%);
+  border:1px solid var(--lu-line);border-radius:14px;
+  padding:38px 42px 30px;margin-bottom:18px;overflow:hidden;
+}
+.lu-cover:before{
+  content:"";position:absolute;left:0;top:0;width:100%;height:3px;
+  background:linear-gradient(90deg,var(--lu-red) 0%,var(--lu-red2) 26%,#d9a441 52%,#c9c3b6 74%,transparent 100%);
+}
+.lu-cover-top{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;flex-wrap:wrap}
+.lu-eyebrow{font-size:10.5px;letter-spacing:3.2px;color:var(--lu-ink3);text-transform:uppercase;font-weight:600}
+.lu-eyebrow b{color:var(--lu-red);font-weight:600}
+.lu-cover h2{
+  font-family:var(--lu-serif);font-size:44px;line-height:1.24;letter-spacing:-.5px;
+  margin:14px 0 12px;max-width:840px;font-weight:600;
+}
+.lu-cover h2 em{font-style:normal;color:var(--lu-red);position:relative}
+.lu-cover h2 em:after{
+  content:"";position:absolute;left:0;right:0;bottom:4px;height:9px;
+  background:rgba(178,58,38,.13);z-index:-1;border-radius:2px;
+}
+.lu-cover .lu-sub{font-size:14px;color:var(--lu-ink2);line-height:1.8;max-width:760px}
+.lu-stamp{
+  flex:none;text-align:right;border-left:1px solid var(--lu-line);padding-left:24px;min-width:172px;
+}
+.lu-stamp .d1{font-family:var(--lu-serif);font-size:30px;font-weight:600;line-height:1.1}
+.lu-stamp .d2{font-size:11.5px;color:var(--lu-ink3);letter-spacing:1.2px;margin-top:4px}
+.lu-stamp .d3{font-size:11px;color:var(--lu-red);margin-top:10px;background:var(--lu-redl);
+  display:inline-block;padding:3px 9px;border-radius:3px;letter-spacing:.5px}
+
+/* 四个大数字 */
+.lu-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:30px;
+  border-top:1px solid var(--lu-line);padding-top:22px}
+.lu-stat{padding:0 26px;border-right:1px solid var(--lu-line)}
+.lu-stat:first-child{padding-left:0}
+.lu-stat:last-child{border-right:0}
+.lu-stat .k{font-size:11px;color:var(--lu-ink3);letter-spacing:.8px}
+.lu-stat .v{font-family:var(--lu-serif);font-size:38px;line-height:1.1;letter-spacing:-1px;margin:4px 0 2px}
+.lu-stat .v small{font-size:15px;letter-spacing:0;margin-left:3px;color:var(--lu-ink3)}
+.lu-stat .n{font-size:11.5px;color:var(--lu-ink2);line-height:1.5}
+.lu-stat.up .v{color:var(--lu-red)}
+.lu-stat.dn .v{color:var(--lu-grn)}
+
+/* 指数条 */
+.lu-indexrow{display:flex;gap:0;margin-top:18px;background:#fff;border:1px solid var(--lu-line);
+  border-radius:8px;overflow:hidden;flex-wrap:wrap}
+.lu-idx{flex:1 1 190px;min-width:0;padding:11px 16px;border-right:1px solid var(--lu-line);display:flex;
+  align-items:baseline;gap:9px;font-size:12.5px;white-space:nowrap}
+.lu-idx:last-child{border-right:0}
+.lu-idx .nm{color:var(--lu-ink2)}
+.lu-idx .px{font-weight:600;font-variant-numeric:tabular-nums}
+.lu-idx .pc{font-weight:600;margin-left:auto;font-variant-numeric:tabular-nums}
+.lu-idx .pc.dn{color:var(--lu-grn)}
+.lu-idx .pc.up{color:var(--lu-red)}
+
+/* 阅读路径 */
+.lu-route{display:flex;gap:0;margin-top:16px;flex-wrap:wrap}
+.lu-route span{font-size:11.5px;color:var(--lu-ink2);padding:5px 0;display:flex;align-items:center;gap:7px}
+.lu-route span:not(:last-child):after{content:"→";color:#c9c3b6;margin:0 12px}
+.lu-route i{font-style:normal;font-family:var(--lu-serif);color:var(--lu-red);font-weight:600}
+
+/* ---------- 章节标题 ---------- */
+.lu-ch{margin:42px 0 18px;padding-top:16px;border-top:1px solid var(--lu-line);position:relative}
+.lu-ch:before{content:"";position:absolute;left:0;top:-1px;width:64px;height:2px;background:var(--lu-red)}
+.lu-ch .cn{font-family:var(--lu-serif);font-size:12px;color:var(--lu-red);letter-spacing:2px;font-weight:600}
+.lu-ch h3{font-family:var(--lu-serif);font-size:27px;font-weight:600;line-height:1.3;margin:8px 0 6px;letter-spacing:-.3px}
+.lu-ch .ask{font-size:13px;color:var(--lu-ink2);line-height:1.8;max-width:860px}
+.lu-ch .en{font-size:10px;color:var(--lu-ink3);letter-spacing:2.4px;text-transform:uppercase;margin-top:6px}
+
+/* ---------- 论文式导语 ---------- */
+.lu-read{
+  background:#fff;border:1px solid var(--lu-line);border-left:3px solid var(--lu-red);
+  border-radius:0 8px 8px 0;padding:16px 22px;margin-bottom:18px;
+  font-size:13.5px;line-height:1.95;color:var(--lu-ink2);
+}
+.lu-read b{color:var(--lu-ink);font-weight:600}
+
+/* ---------- 通用面板 ---------- */
+.lu-card{background:#fff;border:1px solid var(--lu-line);border-radius:10px;padding:20px 22px}
+.lu-card-h{display:flex;align-items:baseline;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.lu-card-h h4{font-size:14px;font-weight:600;letter-spacing:-.1px}
+.lu-card-h .h{font-size:11px;color:var(--lu-ink3)}
+.lu-2col{display:grid;grid-template-columns:1.05fr .95fr;gap:16px}
+@media(max-width:1180px){.lu-2col{grid-template-columns:1fr}}
+.lu-grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media(max-width:1180px){.lu-grid3{grid-template-columns:1fr}}
+
+/* ---------- 宽度：双极条 ---------- */
+.lu-bipolar{margin:6px 0 4px}
+.lu-bp-row{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.lu-bp-lab{width:66px;font-size:12px;color:var(--lu-ink2);flex:none}
+.lu-bp-track{flex:1;height:34px;display:flex;background:var(--lu-paper2);border-radius:4px;overflow:hidden}
+.lu-bp-up{background:linear-gradient(90deg,#d86a4d,var(--lu-red));display:flex;align-items:center;
+  justify-content:flex-end;padding-right:10px;color:#fff;font-size:12px;font-weight:600;min-width:2px;
+  transition:width .8s cubic-bezier(.2,.8,.2,1)}
+.lu-bp-dn{background:linear-gradient(90deg,#2f9a72,var(--lu-grn));display:flex;align-items:center;
+  padding-left:10px;color:#fff;font-size:12px;font-weight:600;transition:width .8s cubic-bezier(.2,.8,.2,1)}
+.lu-bp-mid{background:#ddd7c9;flex:none;min-width:2px}
+
+/* 分布条 */
+.lu-dist{display:flex;align-items:flex-end;gap:4px;height:150px;margin-top:8px;padding:8px 2px 0}
+.lu-dist-c{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:0;height:100%}
+.lu-dist-c .bar{width:100%;border-radius:2px 2px 0 0;position:relative;transition:height .8s cubic-bezier(.2,.8,.2,1)}
+.lu-dist-c .bar.up{background:linear-gradient(180deg,var(--lu-red2),var(--lu-red))}
+.lu-dist-c .bar.dn{background:linear-gradient(180deg,#3aa87d,var(--lu-grn))}
+.lu-dist-c .bar.fl{background:#cfc9ba}
+.lu-dist-c .num{font-size:10px;color:var(--lu-ink2);font-weight:600;margin-bottom:3px;font-variant-numeric:tabular-nums}
+.lu-dist-x{display:flex;gap:4px;margin-top:6px;padding:0 2px}
+.lu-dist-x span{flex:1;text-align:center;font-size:9px;color:var(--lu-ink3);line-height:1.25;letter-spacing:-.2px}
+
+/* ---------- 板块排行 ---------- */
+.lu-sec-row{display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px dashed var(--lu-line)}
+.lu-sec-row:last-child{border-bottom:0}
+.lu-sec-row .nm{width:96px;font-size:12.5px;flex:none;color:var(--lu-ink)}
+.lu-sec-row .tr{flex:1;height:18px;background:var(--lu-paper2);border-radius:3px;overflow:hidden;position:relative}
+.lu-sec-row .tr i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,#e5bcae,var(--lu-red));
+  transition:width .8s cubic-bezier(.2,.8,.2,1)}
+.lu-sec-row .pc{width:52px;text-align:right;font-size:12.5px;font-weight:600;color:var(--lu-red);flex:none;font-variant-numeric:tabular-nums}
+.lu-sec-row .ld{width:118px;font-size:11px;color:var(--lu-ink3);flex:none;text-align:right}
+
+/* 涨停行业分布 chips */
+.lu-indgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(94px,1fr));gap:8px}
+.lu-ind{border:1px solid var(--lu-line);border-radius:6px;padding:8px 10px;background:var(--lu-paper);
+  position:relative;overflow:hidden}
+.lu-ind.s3{border-color:#e3c3b8;background:linear-gradient(160deg,#fdf1ec,#fbeee9)}
+.lu-ind.s2{border-color:#eadfd0;background:#fbf7ef}
+.lu-ind .n{font-size:11.5px;color:var(--lu-ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lu-ind .c{font-family:var(--lu-serif);font-size:21px;font-weight:600;line-height:1.15;color:var(--lu-red)}
+.lu-ind .c small{font-size:10px;color:var(--lu-ink3);margin-left:2px;font-family:inherit}
+.lu-ind.s3 .c{color:var(--lu-red)}
+
+/* 影视扩散 */
+.lu-diff{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:4px}
+@media(max-width:1180px){.lu-diff{grid-template-columns:repeat(3,1fr)}}
+.lu-dcard{border:1px solid var(--lu-line);border-radius:8px;padding:11px 12px;background:#fff;position:relative}
+.lu-dcard .nm{font-size:12.5px;font-weight:600;letter-spacing:-.1px}
+.lu-dcard .cd{font-size:10px;color:var(--lu-ink3);font-variant-numeric:tabular-nums;margin-top:1px}
+.lu-dcard .pc{font-family:var(--lu-serif);font-size:23px;font-weight:600;color:var(--lu-red);line-height:1.2;margin-top:7px}
+.lu-dcard .mt{font-size:10.5px;color:var(--lu-ink3);margin-top:4px;line-height:1.5}
+.lu-dcard .fin{position:absolute;right:9px;top:9px;font-size:9px;padding:1px 5px;border-radius:3px;
+  background:var(--lu-redl);color:var(--lu-red);letter-spacing:.3px}
+
+/* ---------- 连板梯队 ---------- */
+.lu-ladder{margin-top:4px}
+.lu-lrow{display:grid;grid-template-columns:76px 1fr;gap:14px;padding:13px 0;border-bottom:1px dashed var(--lu-line);
+  align-items:start}
+.lu-lrow:last-child{border-bottom:0}
+.lu-ltag{text-align:center;border-radius:8px;padding:7px 4px;background:var(--lu-paper2);border:1px solid var(--lu-line)}
+.lu-ltag .b{font-family:var(--lu-serif);font-size:26px;font-weight:600;line-height:1;color:var(--lu-ink3)}
+.lu-ltag .t{font-size:10px;color:var(--lu-ink3);margin-top:3px}
+.lu-lrow.hi .lu-ltag{background:linear-gradient(160deg,#c0432b,#8f2d1c);border-color:#a5371f}
+.lu-lrow.hi .lu-ltag .b,.lu-lrow.hi .lu-ltag .t{color:#ffe6dc}
+.lu-lrow.mid .lu-ltag{background:var(--lu-redl);border-color:#e8c6ba}
+.lu-lrow.mid .lu-ltag .b{color:var(--lu-red)}
+.lu-lrow.mid .lu-ltag .t{color:#a8614a}
+.lu-lchips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.lu-chip{display:inline-flex;align-items:baseline;gap:6px;border:1px solid var(--lu-line);border-radius:5px;
+  padding:5px 9px 5px 8px;background:#fff;font-size:12px;transition:.15s}
+.lu-chip:hover{border-color:#d9b3a6;background:#fefaf8}
+.lu-chip b{font-weight:600}
+.lu-chip .c{font-size:9.5px;color:var(--lu-ink3);font-variant-numeric:tabular-nums}
+.lu-chip .s{font-size:9.5px;color:var(--lu-ink3);padding-left:6px;border-left:1px solid var(--lu-line)}
+.lu-chip.hot{background:var(--lu-redl);border-color:#e8c6ba}
+.lu-chip.hot .s{color:#a8614a;border-left-color:#e3c3b8}
+.lu-chip.mini{font-size:11px;padding:4px 8px}
+.lu-lmore{font-size:11.5px;color:var(--lu-ink3);padding:4px 0 0}
+
+/* ---------- 封单热区 ---------- */
+.lu-seal{margin-top:2px}
+.lu-seal-row{display:grid;grid-template-columns:22px 118px 1fr 80px 56px;gap:10px;align-items:center;
+  padding:7px 0;border-bottom:1px dashed var(--lu-line);font-size:12px}
+.lu-seal-row:last-child{border-bottom:0}
+.lu-seal-row .rk{font-family:var(--lu-serif);color:var(--lu-ink3);font-size:12px;text-align:center}
+.lu-seal-row .nm b{font-weight:600}
+.lu-seal-row .nm .sub{display:block;font-size:9.5px;color:var(--lu-ink3);font-variant-numeric:tabular-nums}
+.lu-seal-row .nm b{white-space:nowrap}
+.lu-seal-row .tr{height:16px;background:var(--lu-paper2);border-radius:3px;overflow:hidden}
+.lu-seal-row .tr i{display:block;height:100%;background:linear-gradient(90deg,#f0cabb,#c0432b);border-radius:3px;
+  transition:width .8s cubic-bezier(.2,.8,.2,1)}
+.lu-seal-row .am{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+.lu-seal-row .rt{text-align:right;font-size:11px;color:var(--lu-ink3);font-variant-numeric:tabular-nums}
+.lu-seal-row.strong .am{color:var(--lu-red)}
+.lu-seal-row.weak .am{color:var(--lu-ink2)}
+.lu-flag{font-size:9px;padding:1px 5px;border-radius:3px;margin-left:6px;vertical-align:middle;white-space:nowrap}
+.lu-flag.a{background:#f7ded4;color:#9d3220;font-weight:600;letter-spacing:.2px}
+.lu-flag.b{background:#eeece6;color:#7a7264;border:1px solid #ddd8cd;font-weight:600;letter-spacing:.2px}
+
+/* 二分说明 */
+.lu-two{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+@media(max-width:1180px){.lu-two{grid-template-columns:1fr}}
+.lu-note{border:1px solid var(--lu-line);border-radius:8px;padding:13px 15px;background:var(--lu-paper)}
+.lu-note .t{font-size:12px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.lu-note .t i{width:7px;height:7px;border-radius:2px;display:inline-block}
+.lu-note p{font-size:11.5px;color:var(--lu-ink2);line-height:1.75}
+.lu-note.good .t i{background:var(--lu-red)}
+.lu-note.bad .t i{background:#b9b0a0}
+
+/* ---------- 全量名单表 ---------- */
+.lu-tbwrap{background:#fff;border:1px solid var(--lu-line);border-radius:10px;overflow:hidden}
+.lu-tb{width:100%;border-collapse:collapse;font-size:12px}
+.lu-tb thead th{
+  background:var(--lu-paper2);color:var(--lu-ink2);font-weight:600;font-size:11px;letter-spacing:.3px;
+  padding:9px 10px;text-align:left;border-bottom:1px solid var(--lu-line);white-space:nowrap;
+  position:sticky;top:0;cursor:pointer;user-select:none;
+}
+.lu-tb thead th:hover{color:var(--lu-red)}
+.lu-tb thead th.on{color:var(--lu-red);background:#f6ebdc}
+.lu-tb thead th.on:after{content:" ↓";font-size:9px}
+.lu-tb thead th.on.asc:after{content:" ↑"}
+.lu-tb td{padding:7px 10px;border-bottom:1px solid #f2efe8;vertical-align:middle}
+.lu-tb tr:last-child td{border-bottom:0}
+.lu-tb tbody tr:hover{background:#fdfaf6}
+.lu-tb .c{font-variant-numeric:tabular-nums;color:var(--lu-ink3);font-size:11px}
+.lu-tb .n{font-weight:600}
+.lu-tb .pc{color:var(--lu-red);font-weight:600;font-variant-numeric:tabular-nums}
+.lu-tb .num{text-align:right;font-variant-numeric:tabular-nums}
+.lu-tb .bd{display:inline-block;min-width:30px;text-align:center;padding:1px 6px;border-radius:3px;
+  font-size:10.5px;font-weight:600;background:#f3efe6;color:#8a7a5c}
+.lu-tb .bd.h4{background:#8f2d1c;color:#ffe6dc}
+.lu-tb .bd.h3{background:#c0432b;color:#fff}
+.lu-tb .bd.h2{background:var(--lu-redl);color:var(--lu-red)}
+.lu-tb .ind{font-size:11px;color:var(--lu-ink2)}
+.lu-tb .bar{display:inline-block;height:6px;border-radius:3px;background:linear-gradient(90deg,#eec7b8,#c0432b);
+  vertical-align:middle;margin-right:6px}
+
+/* ---------- 结语 ---------- */
+.lu-concl{background:linear-gradient(160deg,#1a1d23,#23282f);border-radius:12px;padding:28px 32px;color:#e8e6e1;
+  margin-top:18px;position:relative;overflow:hidden}
+.lu-concl:after{content:"";position:absolute;right:-50px;bottom:-70px;width:240px;height:240px;
+  background:radial-gradient(circle,rgba(209,80,47,.22),transparent 68%)}
+.lu-concl .eb{font-size:10px;letter-spacing:2.6px;color:#8d867c;text-transform:uppercase}
+.lu-concl h4{font-family:var(--lu-serif);font-size:22px;font-weight:600;margin:8px 0 12px;color:#fff}
+.lu-concl p{font-size:13px;line-height:1.95;color:#c4c0b8;max-width:900px}
+.lu-concl p b{color:#f0c8b8;font-weight:600}
+.lu-rules{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:20px}
+@media(max-width:1180px){.lu-rules{grid-template-columns:1fr}}
+.lu-rule{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);border-radius:8px;padding:13px 15px}
+.lu-rule .k{font-family:var(--lu-serif);font-size:11px;color:#d1502f;letter-spacing:1.5px}
+.lu-rule .t{font-size:12.5px;font-weight:600;color:#fff;margin:5px 0 5px}
+.lu-rule p{font-size:11.5px;line-height:1.7;color:#9d988f}
+
+/* ---------- 数据口径 ---------- */
+.lu-meta{margin-top:18px;border-top:1px solid var(--lu-line);padding-top:14px;
+  font-size:11px;color:var(--lu-ink3);line-height:1.85}
+.lu-meta b{color:var(--lu-ink2);font-weight:600}
+
+/* 进场动画：默认可见，命中视口后播放一次（IO 失效也不会留白） */
+@keyframes luIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+#v-limitup .lu-fade{opacity:1}
+#v-limitup .lu-fade.in{animation:luIn .5s cubic-bezier(.2,.8,.2,1) both}
+@media print{#v-limitup .lu-fade{animation:none!important;opacity:1!important;transform:none!important}}
+
+/* 封面标签 */
+#v-limitup .lu-tagpill{font-size:11px;color:#8d3f2b;background:#fbeade;border:1px solid #f0d8c9;
+  padding:3px 11px;border-radius:20px;letter-spacing:.2px}
