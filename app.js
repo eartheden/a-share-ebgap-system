@@ -36,10 +36,12 @@
   function mean(a) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i]; return s / a.length; }
   var BOND_MEAN = mean(D.bond.series.map(function (x) { return x[1]; }));
 
+  // 调色板：ECharts / canvas 用不了 CSS 变量，这里直接对齐 theme.css 的深色档
+  // （图表坐标轴文字此前是浅色主题的深墨色，在深色画布上同样不可读）
   var C = {
-    ink: '#14161a', ink2: '#4a515c', ink3: '#8b929c', ink4: '#b6bcc5',
-    line: '#e4e1da', buy: '#1a7f5a', warn: '#a8761c', sell: '#c0442a',
-    acc: '#2c5f8a', gold: '#c9a227'
+    ink: '#e8edf7', ink2: '#b6c2d9', ink3: '#8493af', ink4: '#5f6f8d',
+    line: '#1d2a41', buy: '#ff4d6d', warn: '#f5b942', sell: '#00e5a0',
+    acc: '#38bdf8', gold: '#e0b34d'
   };
 
   /* ---------------- 状态 ---------------- */
@@ -542,8 +544,8 @@
     var zones = [
       { from: 0, to: lo, col: '#8f2c1a', t: '极度高估' },
       { from: lo, to: s, col: '#c0442a', t: '中性偏空' },
-      { from: s, to: 50, col: '#c98a2a', t: '中性偏弱' },
-      { from: 50, to: b, col: '#8f9a3a', t: '中性偏强' },
+      { from: s, to: 50, col: '#9a6a14', t: '中性偏弱' },
+      { from: 50, to: b, col: '#66701f', t: '中性偏强' },
       { from: b, to: 100, col: '#1a7f5a', t: '低估 · 加仓' }
     ];
     var rh = '<div class="ruler-mark" style="left:' + p + '%"><span>' + f2(p, 1) + '%</span></div>' +
@@ -583,7 +585,8 @@
       '</div>' +
       '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px">' +
       ['PE(TTM) ' + f2(o.pe) + ' 倍', '股息率 ' + f2(o.dy) + '%', '点位 ' + f2(o.close, 0)].map(function (t) {
-        return '<div style="background:#faf9f6;border-radius:6px;padding:10px;font-size:11.5px;color:#4a515c;text-align:center">' + t + '</div>';
+        // 用类而非内联色，深浅主题都由 CSS 控制
+        return '<div class="signal-tile">' + t + '</div>';
       }).join('') + '</div>';
 
     var wins = [[36, '近 3 年'], [60, '近 5 年'], [120, '近 10 年'], [0, '全样本']];
@@ -635,7 +638,7 @@
       '<div class="alloc-legend"><span><s style="background:#2c5f8a"></s>权益 ' + f2(eq, 0) + '%</span>' +
       '<span><s style="background:#c9a227"></s>债券 ' + f2(bondPct, 0) + '%</span>' +
       '<span><s style="background:#cfcac0"></s>现金 ' + f2(100 - eq - bondPct, 0) + '%</span></div></div></div>' +
-      '<p style="font-size:12.5px;color:#4a515c;line-height:1.85;padding-top:14px;border-top:1px dashed #efece6">' +
+      '<p style="font-size:12.5px;color:var(--ink2);line-height:1.85;padding-top:14px;border-top:1px dashed var(--line2)">' +
       '仓位公式：<span class="mono" style="font-size:11.5px">' + r.base + '% + ' + r.slope + ' × (分位 − 50)</span>，' +
       '裁剪在 0–100%。分位 50 对应基准仓位 ' + r.base + '%，分位 80 对应 ' + f2(allocOf(80, S.risk), 0) +
       '%，分位 20 对应 ' + f2(allocOf(20, S.risk), 0) + '%。这是刻度尺，不是预测器。</p>' +
@@ -754,7 +757,7 @@
       bh += '<tr><td><b>' + a.name + '</b></td><td class="num">' + a.n + '</td>' +
         '<td class="num ' + (a.avg >= 0 ? 'r' : 'g') + '">' + (a.avg >= 0 ? '+' : '') + f2(a.avg, 1) + '%</td>' +
         '<td class="num">' + f2(a.win, 0) + '%</td>' +
-        '<td style="white-space:normal;color:#4a515c">' + read + '</td></tr>';
+        '<td style="white-space:normal;color:var(--ink2)">' + read + '</td></tr>';
     });
     document.getElementById('tbl-bt').innerHTML = bh + '</tbody>';
     document.getElementById('bt-hint').textContent =
@@ -988,8 +991,9 @@
       var fwd3 = i + 3 < s.length ? (s[i + 3].close / o.close - 1) * 100 : null;
       var fwd12 = i + 12 < s.length ? (s[i + 12].close / o.close - 1) * 100 : null;
       var isCur = d === CUR_DATE;
-      h += '<tr' + (isCur ? ' style="background:#fdfbf6"' : '') + '><td><b>' + d + '</b>' + (isCur ? ' <span style="font-size:10px;color:#a8761c">当前</span>' : '') +
-        '</td><td style="color:#4a515c">' + (labelMap[d] || '—') + '</td>' +
+      // 当前行高亮改用类，颜色交给主题层控制（内联浅色在深色主题下会盖不住）
+      h += '<tr' + (isCur ? ' class="tbl-cur"' : '') + '><td><b>' + d + '</b>' + (isCur ? ' <span class="tbl-cur-tag">当前</span>' : '') +
+        '</td><td class="tbl-dim">' + (labelMap[d] || '—') + '</td>' +
         '<td class="num">' + f2(o.close, 0) + '</td><td class="num">' + f2(o.pe) + '</td>' +
         '<td class="num">' + f2(o.bond, 2) + '%</td><td class="num"><b>' + f2(erpOf(o)) + '%</b></td>' +
         '<td class="num">' + f2(pp, 1) + '%</td>' +
@@ -1142,10 +1146,24 @@
       v.dataset.built = '1';
     }
   }
+  /* 虚拟持仓：模块自渲染（paper.js）；这里只做入口委托 */
+  function renderPaperWrap() {
+    if (window.EB_PAPER && typeof window.EB_PAPER.enter === 'function') {
+      window.EB_PAPER.enter();
+      return;
+    }
+    var v = document.getElementById('v-paper');
+    if (v && !v.dataset.built) {
+      v.innerHTML = '<div class="card"><div class="card-h"><h2>虚拟持仓脚本未加载</h2></div>' +
+        '<p class="foot-note">请确认 paper.js 与 paper.css 与 index.html 在同一目录，然后刷新页面。</p></div>';
+      v.dataset.built = '1';
+    }
+  }
   var RENDER = {
     overview: renderOverview, curve: renderCurve, signal: renderSignal,
     alloc: renderAlloc,
     pick: renderPickWrap,
+    paper: renderPaperWrap,
     stock: renderStock,
     history: renderHistory,
     limitup: renderLimitUp
@@ -1159,6 +1177,8 @@
     RENDER[v]();
     setTimeout(resizeAll, 40);
     if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
+    /* 广播当前视图：模块可以据此收尾（paper.js 用它关掉跨页残留的抽屉） */
+    document.dispatchEvent(new CustomEvent('eb:view', { detail: { view: v } }));
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
   window.addEventListener('hashchange', function () {
@@ -1309,6 +1329,9 @@
         '<br>国债基准 ' + (an.bondDate || '—');
     }
   }
+
+  /* 供其它模块跨视图跳转（paper.js 的「个股分析」「去选股引擎」） */
+  window.EB_APP = { show: show };
 
   /* ---------------- 启动 ---------------- */
   syncCurrent();

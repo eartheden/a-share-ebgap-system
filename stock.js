@@ -19,33 +19,29 @@
 
   /* ================= 基础工具 ================= */
 
-  var SEQ = 0;
+  // 上游数据统一走本机代理 /api/stock/em：
+  // 1) 浏览器直连东财会在部分网络（VPN / fake-ip）下整体不可达，代理侧有 DoH 兜底；
+  // 2) 实时报价被拦时代理会自动切腾讯源并翻译成东财字段，前端无感知；
+  // 3) 代理侧 30s 短缓存，切回页面重绘不重复打上游。
+  // 函数名保留 jsonp 是历史叫法，现在返回的是 Promise<纯 JSON>。
   function jsonp(url, timeout) {
-    return new Promise(function (resolve, reject) {
-      var name = 'EBJ_' + Date.now() + '_' + (++SEQ);
-      var el = document.createElement('script');
-      var done = false;
-      function cleanup() {
-        if (el.parentNode) el.parentNode.removeChild(el);
-        try { delete window[name]; } catch (e) { window[name] = undefined; }
-      }
-      var timer = setTimeout(function () {
-        if (done) return;
-        done = true; cleanup(); reject(new Error('数据接口超时，请检查网络'));
-      }, timeout || 12000);
-      window[name] = function (data) {
-        if (done) return;
-        done = true; clearTimeout(timer); cleanup(); resolve(data);
-      };
-      el.onerror = function () {
-        if (done) return;
-        done = true; clearTimeout(timer); cleanup();
-        reject(new Error('数据接口不可达，请检查网络'));
-      };
-      // 不同数据源的回调参数名不同：datacenter 用 callback，行情接口用 cb
-      var pname = url.indexOf('datacenter-web') >= 0 ? 'callback' : 'cb';
-      el.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + pname + '=' + name;
-      document.head.appendChild(el);
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, timeout || 15000);
+    return fetch('/api/stock/em?u=' + encodeURIComponent(url), {
+      headers: { Accept: 'application/json' },
+      signal: ctl.signal
+    }).then(function (r) {
+      clearTimeout(timer);
+      return r.json().then(function (j) {
+        if (!r.ok) {
+          throw new Error((j && j.error) ? j.error : '数据接口异常 HTTP ' + r.status);
+        }
+        return j;
+      });
+    }, function (e) {
+      clearTimeout(timer);
+      if (e && e.name === 'AbortError') throw new Error('数据接口超时，请检查网络');
+      throw new Error('本机服务不可达，请确认 8899 端口的服务在运行');
     });
   }
 
@@ -115,9 +111,10 @@
           open: num(d.f46) ? d.f46 / p : null,
           high: num(d.f44) ? d.f44 / p : null,
           low: num(d.f45) ? d.f45 / p : null,
-          chgPct: num(d.f170) ? d.f170 / 100 : null,
-          amp: num(d.f171) ? d.f171 / 100 : null,
-          volRatio: num(d.f50) ? d.f50 / 100 : null,
+          // 涨跌/振幅/量比为 0 是合法值（平盘、一字板），不能当「无数据」丢掉
+          chgPct: (d.f170 === undefined || d.f170 === null || d.f170 === '-') ? null : d.f170 / 100,
+          amp: (d.f171 === undefined || d.f171 === null || d.f171 === '-') ? null : d.f171 / 100,
+          volRatio: (d.f50 === undefined || d.f50 === null || d.f50 === '-') ? null : d.f50 / 100,
           vol: num(d.f47), amount: num(d.f48),
           totalShare: num(d.f84), floatShare: num(d.f85),
           mktCap: num(d.f116), floatCap: num(d.f117),
@@ -208,7 +205,8 @@
             d: String(r.TRADE_DATE || '').slice(0, 10),
             pe: pe, pb: pb,
             close: num(r.CLOSE_PRICE),
-            cap: num(r.TOTAL_MARKET_CAP)
+            cap: num(r.TOTAL_MARKET_CAP),
+            board: r.BOARD_NAME ? String(r.BOARD_NAME) : ''
           });
         });
       });
@@ -601,6 +599,17 @@
 
   var ORDER = ['strong-buy', 'buy', 'hold', 'watch', 'reduce', 'sell'];
 
+  // 决策卡上的动作词：把「值得重仓研究」这类评级描述压成一眼能懂的动作
+  var ACT = {
+    'strong-buy': { t: '买入', s: 'strong' },
+    'buy': { t: '买入', s: 'buy' },
+    'hold': { t: '等回调', s: 'hold' },
+    'watch': { t: '观望', s: 'watch' },
+    'reduce': { t: '减仓', s: 'reduce' },
+    'sell': { t: '回避', s: 'sell' }
+  };
+
+
   function downgrade(k, steps) {
     var i = ORDER.indexOf(k);
     return ORDER[Math.min(ORDER.length - 1, i + steps)];
@@ -674,6 +683,8 @@
     // 立刻把收盘日期存成独立变量，避免后续任何同名 var 覆盖 last 导致「undefined 收盘」
     var lastDate = (last && last.d) ? last.d : '';
     var price = q.price || last.c;
+    // 腾讯兜底报价缺行业字段：估值序列自带 BOARD_NAME，同口径回填，标签和行业 PE 不至于全空
+    if (!q.industry && val.length && val[0].board) q.industry = val[0].board;
 
     /* ---- 估值 ---- */
     // 统一用 PE(TTM)：优先取估值序列最新一条，保证与历史分位同口径
@@ -990,18 +1001,39 @@
     // 公司名片：F10 异步加载完成后填入，接口不可用时保持空白，不阻塞下方六维结论
     var fundId = '<div id="sa-fund-id" hidden></div>';
 
-    var verdictCard =
-      '<div class="sa-verdict card ' + vk + '">' +
-      '<div class="sa-vscore"><b>' + f1(A.total) + '</b><span>综合评分</span></div>' +
-      '<div class="sa-vbody">' +
-      '<div class="sa-vlabel">' + A.verdict.label + '</div>' +
-      '<p>' + A.verdict.short + '。' + (A.verdict.notes.length ? A.verdict.notes.join('；') + '。' : '') + '</p>' +
+    // 决策卡：把「评级 + 仓位 + 目标价 + 止损 + 分批计划」压成一张，
+    // 放在结果最上方。原来的做法是评级卡在上、操作建议埋在十几张卡片中间，
+    // 用户滑到底才看到该怎么动手，等于白写。
+    var act = ACT[vk] || ACT.watch;
+    var decisionCard =
+      '<div class="card sa-decision ' + act.s + '">' +
+      '<div class="sa-dec-top">' +
+      '<div class="sa-dec-act">' + act.t + '</div>' +
+      '<div class="sa-dec-mid">' +
+      '<div class="sa-dec-label">' + A.verdict.label + '</div>' +
+      '<div class="sa-dec-sub">' + A.verdict.short + '</div>' +
       '</div>' +
-      '<div class="sa-vtarget">' +
-      '<div><i>目标价' + (A.targetKind ? '（' + A.targetKind + '）' : '') + '</i><b>' + (A.targetPrice ? f2(A.targetPrice) : '—') + '</b></div>' +
-      '<div><i>空间</i><b class="' + (A.upside >= 0 ? 'up' : 'dn') + '">' + (A.upside === null ? '—' : sgn(A.upside, 1) + '%') + '</b></div>' +
-      '<div><i>止损</i><b class="dn">' + f2(A.stop) + '</b></div>' +
-      '</div></div>';
+      '<div class="sa-dec-score"><b>' + f1(A.total) + '</b><i>综合分</i></div>' +
+      '</div>' +
+      '<div class="sa-dec-metrics">' +
+      '<div class="sa-dec-m"><i>建议仓位上限</i><b>' + A.posCap + '<u>%</u></b><em>占总资产</em></div>' +
+      '<div class="sa-dec-m"><i>目标价</i><b>' + (A.targetPrice ? f2(A.targetPrice) : '—') + '</b><em>' +
+      (A.targetKind || '无可用目标') + '</em></div>' +
+      '<div class="sa-dec-m"><i>潜在空间</i><b class="' + (A.upside >= 0 ? 'up' : 'dn') + '">' +
+      (A.upside === null ? '—' : sgn(A.upside, 1) + '<u>%</u>') + '</b><em>现价 ' + f2(A.price) + '</em></div>' +
+      '<div class="sa-dec-m"><i>止损位</i><b class="dn">' + f2(A.stop) + '</b><em>跌破离场 ' + f1(A.downside) + '%</em></div>' +
+      '</div>' +
+      '<div class="sa-dec-plan">' +
+      '<div class="sa-dec-plan-h">执行步骤</div>' +
+      A.plan.map(function (p, i) {
+        return '<div class="sa-dec-step"><i>' + (i + 1) + '</i><span>' + p + '</span></div>';
+      }).join('') +
+      '</div>' +
+      (A.verdict.notes.length
+        ? '<ul class="sa-dec-why">' + A.verdict.notes.map(function (n) { return '<li>' + n + '</li>'; }).join('') + '</ul>'
+        : '') +
+      '<div class="sa-dec-foot">以上由规则化六维评分推得，不构成投资建议。下单前请自行核验最新公告、业绩预告与行业数据。</div>' +
+      '</div>';
 
     var dimCard =
       '<div class="card sa-dims-card">' +
@@ -1109,14 +1141,6 @@
       '</div>' +
       '</div></div>';
 
-    var planCard =
-      '<div class="card sa-plan">' +
-      '<div class="card-h"><h2>操作建议</h2><span class="hint">建议仓位上限 ' + A.posCap + '%（占总资产）</span></div>' +
-      A.plan.map(function (p, i) {
-        return '<div class="sa-plan-row"><i>0' + (i + 1) + '</i><span>' + p + '</span></div>';
-      }).join('') +
-      '</div>';
-
     var prosCons =
       '<div class="sa-pc">' +
       '<div class="card sa-pros"><div class="card-h"><h2>支持买入的理由</h2></div><ul>' +
@@ -1152,11 +1176,11 @@
       '<p class="red"><b>本页不构成投资建议。</b>任何买卖决策请自行核验最新公告、业绩预告、行业数据，并结合自身风险承受能力。</p>' +
       '</div>';
 
-    return head + fundId + verdictCard + dimCard +
+    return head + fundId + decisionCard + dimCard +
       '<div class="sa-grid2">' + valCard + finCard + '</div>' +
       '<div class="sa-grid2">' + growCard + techCard + '</div>' +
       '<div class="sa-grid2">' + fundCard + riskCard + '</div>' +
-      priceCard + planCard + prosCons + klineCard + finTable + fundFull + note;
+      priceCard + prosCons + klineCard + finTable + fundFull + note;
   }
 
   function renderFinTable(fin) {
@@ -1293,6 +1317,175 @@
   var LAST = null;
   var REQ = 0;   // 请求序号：连续换股时，只允许最后一次请求写入结果，防止慢响应覆盖新股票
 
+  /* ================= 搜索建议 + 查询历史 ================= */
+
+  var SUG_API = '/api/stock/suggest';
+  var HIST_KEY = 'ebgap.stock.history.v1';
+  var HIST_MAX = 12;
+
+  // 输入框里显示名称比显示代码好认，但「分析」和「回车」都要能拿回代码，
+  // 所以名称始终能在建议表里二次命中（服务端缓存 1 小时，命中很快）。
+  var SUG_LIST = [];   // 当前下拉里的候选
+  var SUG_IDX = -1;    // 键盘高亮项
+  var SUG_TIMER = 0;
+  var SUG_SEQ = 0;     // 请求序号，防止慢响应盖掉新输入
+
+  function sugEl() { return document.getElementById('sa-sug'); }
+  function sugInput() { return document.getElementById('sa-code'); }
+
+  function sugHide() {
+    var box = sugEl();
+    if (box) { box.hidden = true; box.innerHTML = ''; }
+    SUG_LIST = [];
+    SUG_IDX = -1;
+  }
+
+  // 排序：代码精确 / 代码前缀 / 名称前缀 / 拼音前缀 / 名称包含 / 拼音包含
+  function sugRank(item, kw) {
+    var k = kw.toLowerCase();
+    var c = item.code, n = item.name, p = (item.pinyin || '').toLowerCase();
+    if (c === k) return 0;
+    if (c.indexOf(k) === 0) return 1;
+    if (n === kw) return 2;
+    if (n.indexOf(kw) === 0) return 3;
+    if (p.indexOf(k) === 0) return 4;
+    if (n.indexOf(kw) > 0) return 5;
+    if (p.indexOf(k) > 0) return 6;
+    return 9;
+  }
+
+  function sugQuery(kw, limit) {
+    var url = SUG_API + '?q=' + encodeURIComponent(kw) + '&limit=' + (limit || 8);
+    return fetch(url, { headers: { Accept: 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var list = (j && j.list) || [];
+        return list.slice().sort(function (a, b) { return sugRank(a, kw) - sugRank(b, kw); });
+      });
+  }
+
+  function sugRender(list, kw) {
+    var box = sugEl();
+    if (!box) return;
+    SUG_LIST = list;
+    SUG_IDX = -1;
+    if (!list.length) { sugHide(); return; }
+    box.innerHTML = list.map(function (x, i) {
+      // 命中片段高亮，让用户一眼看出为什么匹配上了
+      var name = x.name;
+      var at = kw ? name.toLowerCase().indexOf(kw.toLowerCase()) : -1;
+      var nm = at >= 0
+        ? name.slice(0, at) + '<b>' + name.slice(at, at + kw.length) + '</b>' + name.slice(at + kw.length)
+        : name;
+      return '<button type="button" class="sa-sug-item" data-i="' + i + '" data-code="' + x.code + '">' +
+        '<span class="sa-sug-name">' + nm + '</span>' +
+        '<span class="sa-sug-code">' + x.code + '</span>' +
+        '<span class="sa-sug-mkt">' + x.mkt + '</span>' +
+        '</button>';
+    }).join('');
+    box.hidden = false;
+  }
+
+  function sugMark(i) {
+    var box = sugEl();
+    if (!box) return;
+    var items = box.querySelectorAll('.sa-sug-item');
+    if (!items.length) return;
+    SUG_IDX = (i + items.length) % items.length;
+    for (var k = 0; k < items.length; k++) items[k].classList.toggle('on', k === SUG_IDX);
+    var cur = items[SUG_IDX];
+    if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
+  }
+
+  function sugOnInput(kw) {
+    clearTimeout(SUG_TIMER);
+    kw = String(kw || '').trim();
+    // 纯 6 位代码不用再查建议，直接分析更符合肌肉记忆
+    if (!kw || /^\d{6}$/.test(kw)) { sugHide(); return; }
+    var my = ++SUG_SEQ;
+    SUG_TIMER = setTimeout(function () {
+      sugQuery(kw, 8).then(function (list) {
+        if (my !== SUG_SEQ) return;
+        sugRender(list, kw);
+      }).catch(function () {
+        if (my !== SUG_SEQ) return;
+        sugHide();
+      });
+    }, 180);
+  }
+
+  /* ---------- 查询历史 ---------- */
+
+  function histRead() {
+    try {
+      var raw = localStorage.getItem(HIST_KEY);
+      var arr = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(arr)) return [];
+      return arr.filter(function (x) { return x && /^\d{6}$/.test(String(x.code || '')); });
+    } catch (e) { return []; }
+  }
+
+  function histWrite(arr) {
+    try { localStorage.setItem(HIST_KEY, JSON.stringify(arr.slice(0, HIST_MAX))); } catch (e) { /* 隐私模式下写不进去，忽略 */ }
+  }
+
+  function ago(ts) {
+    if (!ts) return '';
+    var d = Math.max(0, Date.now() - ts) / 1000;
+    if (d < 60) return '刚刚';
+    if (d < 3600) return Math.floor(d / 60) + ' 分钟前';
+    if (d < 86400) return Math.floor(d / 3600) + ' 小时前';
+    if (d < 86400 * 30) return Math.floor(d / 86400) + ' 天前';
+    var d2 = new Date(ts);
+    return (d2.getMonth() + 1) + '-' + d2.getDate();
+  }
+
+  function histPush(A) {
+    var q = A.quote;
+    var prev = histRead().filter(function (x) { return x.code !== q.code; });
+    prev.unshift({
+      code: q.code,
+      name: q.name,
+      price: A.price,
+      chg: q.chgPct,
+      score: A.total,
+      verdict: A.verdict.label,
+      at: Date.now()
+    });
+    histWrite(prev);
+    renderHist();
+  }
+
+  function histClear() {
+    histWrite([]);
+    renderHist();
+  }
+
+  function renderHist() {
+    var box = document.getElementById('sa-history');
+    if (!box) return;
+    var arr = histRead();
+    if (!arr.length) { box.hidden = true; box.innerHTML = ''; return; }
+    box.hidden = false;
+    box.innerHTML =
+      '<div class="sa-hist-head">' +
+      '<span class="sa-hist-lab">最近查询</span>' +
+      '<button type="button" class="sa-hist-clear" data-act="clear">清空</button>' +
+      '</div>' +
+      '<div class="sa-hist-list">' + arr.map(function (x) {
+        var cls = (x.chg === null || x.chg === undefined) ? '' : (x.chg >= 0 ? 'up' : 'dn');
+        return '<button type="button" class="sa-hist-item" data-code="' + x.code + '"' +
+          ' title="' + x.name + (x.verdict ? ' · ' + x.verdict : '') + (x.at ? ' · ' + ago(x.at) : '') + '">' +
+          '<span class="sa-hist-name">' + x.name + '</span>' +
+          '<span class="sa-hist-code">' + x.code + '</span>' +
+          '<span class="sa-hist-chg ' + cls + '">' +
+          ((x.chg === null || x.chg === undefined || !isFinite(x.chg)) ? '—' : sgn(x.chg, 2) + '%') +
+          '</span>' +
+          '<span class="sa-hist-score">' + ((x.score === null || x.score === undefined) ? '—' : f1(x.score)) + '</span>' +
+          '</button>';
+      }).join('') + '</div>';
+  }
+
   function setLoading(on, txt) {
     var el = document.getElementById('sa-loading');
     if (!el) return;
@@ -1327,16 +1520,17 @@
     }
   }
 
-  function run(code) {
+  function runCode(code) {
     code = String(code || '').replace(/\D/g, '');
     if (code.length !== 6) {
-      showError('请输入 6 位股票代码，例如 600519、000001、300750');
+      showError('请输入股票名称、拼音或 6 位代码，例如 茅台 / gzmt / 600519');
       return;
     }
     if (!secidOf(code)) {
       showError(codeMsg(code));
       return;
     }
+    sugHide();
     clearError();
     var box = document.getElementById('sa-result');
     box.hidden = true;
@@ -1348,8 +1542,10 @@
       LAST = A;
       setLoading(false);
       paint(A, code);
+      // 输入框回填名称，比回填代码更好认；再次回车时名称能命中建议表
       var inp = document.getElementById('sa-code');
-      if (inp) inp.value = code;
+      if (inp) inp.value = A.quote.name;
+      histPush(A);
       try {
         history.replaceState(null, '', '#stock=' + code);
       } catch (e) { /* ignore */ }
@@ -1358,6 +1554,34 @@
       if (my !== REQ) return;
       setLoading(false);
       showError(err && err.message ? err.message : '分析失败，请稍后重试');
+    });
+  }
+
+  // 对外入口：既吃 6 位代码，也吃名称 / 拼音。
+  // 名称这类输入先过一次搜索建议，取相关度最高的那只，避免模糊匹配选错标的。
+  function run(input) {
+    var raw = String(input === null || input === undefined ? '' : input).trim();
+    if (!raw) { showError('请输入股票名称、拼音或 6 位代码'); return; }
+    if (/^\d{6}$/.test(raw)) { runCode(raw); return; }
+    // 「600519 贵州茅台」这种带代码前缀的，直接取代码，不浪费一次搜索
+    var d6 = /(?:^|\D)(\d{6})(?:\D|$)/.exec(raw);
+    if (d6 && /^\d/.test(raw)) { runCode(d6[1]); return; }
+    if (!/^[0-9A-Za-z\u4e00-\u9fa5\s*]+$/.test(raw)) {
+      showError('只能输入股票名称、拼音或 6 位代码');
+      return;
+    }
+    clearError();
+    var my = ++REQ;
+    sugQuery(raw, 5).then(function (list) {
+      if (my !== REQ) return;
+      if (!list.length) {
+        showError('没有匹配到「' + raw + '」，换个简称或直接输入 6 位代码试试');
+        return;
+      }
+      runCode(list[0].code);
+    }).catch(function () {
+      if (my !== REQ) return;
+      showError('搜索服务暂不可用，请直接输入 6 位代码');
     });
   }
 
@@ -1376,28 +1600,88 @@
     if (quick && !quick.dataset.done) {
       quick.dataset.done = '1';
       quick.innerHTML = '<span class="sa-quick-lab">试试：</span>' + quickList().map(function (x) {
-        return '<button class="sa-chip" data-code="' + x.c + '">' + x.n + ' <em>' + x.c + '</em></button>';
+        return '<button type="button" class="sa-chip" data-code="' + x.c + '">' + x.n + ' <em>' + x.c + '</em></button>';
       }).join('');
       quick.addEventListener('click', function (e) {
         var b = e.target.closest('.sa-chip');
-        if (b) run(b.dataset.code);
+        if (b) runCode(b.dataset.code);
       });
     }
+
     var btn = document.getElementById('sa-go');
     if (btn && !btn.dataset.done) {
       btn.dataset.done = '1';
       btn.addEventListener('click', function () { run(document.getElementById('sa-code').value); });
     }
+
     var inp = document.getElementById('sa-code');
     if (inp && !inp.dataset.done) {
       inp.dataset.done = '1';
       inp.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') run(this.value);
+        var box = sugEl();
+        var open = box && !box.hidden;
+        if (e.key === 'ArrowDown' && open) { e.preventDefault(); sugMark(SUG_IDX + 1); return; }
+        if (e.key === 'ArrowUp' && open) { e.preventDefault(); sugMark(SUG_IDX - 1); return; }
+        if (e.key === 'Escape') { sugHide(); return; }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (open && SUG_IDX >= 0 && SUG_LIST[SUG_IDX]) {
+            var pick = SUG_LIST[SUG_IDX];
+            sugHide();
+            runCode(pick.code);
+          } else {
+            sugHide();
+            run(this.value);
+          }
+        }
+      });
+      // 名称、拼音、代码都要能输入，所以不再过滤字符；
+      // 组合输入（中文拼音候选）期间不触发搜索，否则会把拼音当关键词查一遍
+      inp.addEventListener('compositionstart', function () { this.dataset.ims = '1'; });
+      inp.addEventListener('compositionend', function () {
+        delete this.dataset.ims;
+        sugOnInput(this.value);
       });
       inp.addEventListener('input', function () {
-        this.value = this.value.replace(/\D/g, '').slice(0, 6);
+        if (this.dataset.ims) return;
+        sugOnInput(this.value);
+      });
+      inp.addEventListener('focus', function () {
+        if (this.value.trim() && !/^\d{6}$/.test(this.value.trim())) sugOnInput(this.value);
+      });
+      inp.addEventListener('blur', function () {
+        // 延后收起，否则点击下拉项时 blur 先触发，点击落空
+        setTimeout(function () {
+          var box = sugEl();
+          if (box && !box.matches(':hover')) sugHide();
+        }, 140);
       });
     }
+
+    var sug = sugEl();
+    if (sug && !sug.dataset.done) {
+      sug.dataset.done = '1';
+      // 交给 mousedown，早于 input 的 blur
+      sug.addEventListener('mousedown', function (e) {
+        var b = e.target.closest('.sa-sug-item');
+        if (!b) return;
+        e.preventDefault();
+        sugHide();
+        runCode(b.dataset.code);
+      });
+    }
+
+    var hist = document.getElementById('sa-history');
+    if (hist && !hist.dataset.done) {
+      hist.dataset.done = '1';
+      hist.addEventListener('click', function (e) {
+        var c = e.target.closest('.sa-hist-clear');
+        if (c) { histClear(); return; }
+        var it = e.target.closest('.sa-hist-item');
+        if (it) runCode(it.dataset.code);
+      });
+    }
+    renderHist();
   }
 
   function renderView() {
@@ -1408,7 +1692,7 @@
     }, 60);
     // 支持 #stock=600519 直接定位
     var m = /#stock=(\d{6})/.exec(location.hash);
-    if (m && (!LAST || LAST.quote.code !== m[1])) run(m[1]);
+    if (m && (!LAST || LAST.quote.code !== m[1])) runCode(m[1]);
     else if (LAST) {
       var box = document.getElementById('sa-result');
       if (box && box.hidden) paint(LAST, LAST.quote.code);
@@ -1424,5 +1708,9 @@
     }, 140);
   });
 
-  window.EB_STOCK = { render: renderView, run: run, mount: mount };
+  window.EB_STOCK = {
+    render: renderView, run: run, runCode: runCode, mount: mount,
+    history: { read: histRead, clear: histClear, push: histPush, render: renderHist },
+    suggest: sugQuery
+  };
 })();

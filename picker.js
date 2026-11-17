@@ -35,25 +35,77 @@
     { key: 'd6', name: '质量安全', short: '质量', desc: 'ROE、净利增速、PE 排雷' }
   ];
 
-  var W_BASE = { d1: 28, d2: 22, d3: 16, d4: 14, d5: 10, d6: 10 };
+  /* ================= 三档持有周期 =================
+     同一批行情，三套完全不同的选股逻辑：
+       S 短线：赚情绪与资金的钱，看当日主力/量能/行业热度，1–5 个交易日
+       M 中线：赚趋势与景气的钱，看 60 日位置与行业持续性，10–30 个交易日
+       L 长线：赚业绩与估值的钱，看 ROE/估值/位置，60–180 个交易日
+     权重 d1–d6 对应六维分数；vw 是「估值分」在合成里的固定占比
+     （短线 vw=0，中线 16%，长线 38%——长线必须把估值算进去）。
+     权重可被用户按档位单独调整，互不干扰。 */
+  var HZ = {
+    S: {
+      key: 'S', label: '短线', short: '短',
+      window: '1–5 个交易日',
+      shortWin: '1–5 日',
+      desc: '赚情绪与资金的钱：主力当日进场、量能放大、行业有热度，快进快出。',
+      discipline: '止损 −4.5% 左右，第一目标 +5.5%，破位就走，不隔夜恋战。',
+      w: { d1: 32, d2: 28, d3: 8, d4: 18, d5: 7, d6: 7 },
+      vw: 0,
+      topN: 6,
+      buyLow: 0.015, buyHigh: 0.005, stop: 0.045, t1: 0.055, t2: 0.09,
+      posBase: [15, 13, 11, 9, 7]
+    },
+    M: {
+      key: 'M', label: '中线', short: '中',
+      window: '10–30 个交易日（约 2–6 周）',
+      shortWin: '10–30 日',
+      desc: '赚趋势与景气的钱：60 日位置在启动段、行业动能能延续、基本面不拖后腿。',
+      discipline: '止损 −8% 左右，第一目标 +12%，按周看，不被日内波动洗出去。',
+      w: { d1: 14, d2: 10, d3: 28, d4: 20, d5: 12, d6: 16 },
+      vw: 0.16,
+      topN: 4,
+      buyLow: 0.03, buyHigh: 0.01, stop: 0.08, t1: 0.12, t2: 0.20,
+      posBase: [12, 10, 9, 8, 7]
+    },
+    L: {
+      key: 'L', label: '长线', short: '长',
+      window: '60–180 个交易日（约 3–9 个月）',
+      shortWin: '60–180 日',
+      desc: '赚业绩与估值的钱：ROE 稳定、估值不贵、位置未透支，忽略短期波动。',
+      discipline: '止损 −15% 左右，第一目标 +25%，按季报验证，分批建仓。',
+      w: { d1: 6, d2: 4, d3: 18, d4: 6, d5: 10, d6: 56 },
+      vw: 0.38,
+      topN: 3,
+      buyLow: 0.05, buyHigh: 0.02, stop: 0.15, t1: 0.25, t2: 0.45,
+      posBase: [10, 9, 8, 7, 6]
+    }
+  };
+  var HZ_ORDER = ['S', 'M', 'L'];
+
+  /* 各档硬性门槛：同一只票在短线档合格，不代表能进长线名单 */
+  var HZ_RULE = {
+    S: { minAmt: 1.5e8, maxTurn: 25, minCap: 20e8, minList: 60, maxD60: 90, minPct: -5 },
+    M: { minAmt: 1.0e8, maxTurn: 15, minCap: 40e8, minList: 180, maxD60: 55, minPct: -7, minRoe: 2, maxPe: 150, needProfit: true },
+    L: { minAmt: 0.8e8, maxTurn: 12, minCap: 80e8, minList: 730, maxD60: 60, minD60: -40, minRoe: 8, maxPe: 60, minNp: -15, needProfit: true }
+  };
+
+  /* 仓位模式：只调整仓位系数与短线档候选数量，不再覆盖三档权重 */
   var REGIME = {
     offense: {
       label: '进攻模式', cls: 'off', temp: '市场普涨、赚钱效应强',
-      w: { d1: 26, d2: 26, d3: 14, d4: 16, d5: 8, d6: 10 },
-      topN: 6, pos: '总仓位 60%–80%，单只 10%–15%',
-      note: '资金与量价权重上调，优先「主力进 + 量能起 + 行业领涨」的进攻型标的；可容忍位置略高。'
+      posMul: 1.0, sTopN: 6, pos: '总仓位 60%–80%，单只 10%–15%',
+      note: '行情偏强：短线档多给候选、仓位系数给足；中长线档数量不变，避免在情绪高点堆长期仓位。'
     },
     neutral: {
       label: '均衡模式', cls: 'neu', temp: '涨跌互现、结构分化',
-      w: { d1: 28, d2: 22, d3: 16, d4: 14, d5: 10, d6: 10 },
-      topN: 5, pos: '总仓位 30%–50%，单只 8%–12%',
-      note: '标准权重，要求资金与量价同时成立；位置和行业动能作为过滤器，不做单边押注。'
+      posMul: 0.85, sTopN: 5, pos: '总仓位 30%–50%，单只 8%–12%',
+      note: '结构市：三档都按标准执行，短线档取 5 只，中长线档只留最优的少数标的。'
     },
     defense: {
       label: '防守模式', cls: 'def', temp: '下跌家数占优、情绪偏弱',
-      w: { d1: 32, d2: 14, d3: 18, d4: 10, d5: 12, d6: 14 },
-      topN: 3, pos: '总仓位 10%–20%，单只 ≤8%',
-      note: '资金与质量权重上调、量价权重下调，只做逆势有主力承接的少数标的；宁可少选也不硬凑。'
+      posMul: 0.6, sTopN: 3, pos: '总仓位 10%–20%，单只 ≤8%',
+      note: '弱势：短线档收缩到 3 只、仓位系数打六折；中长线档宁可空着，也不为了凑数降低门槛。'
     }
   };
 
@@ -69,46 +121,52 @@
     at: null,           // 最近一次成功抓取时间
     quoteDate: null,    // 行情所属交易日 YYYY-MM-DD
     src: null,          // 数据源：eastmoney | tencent
+    /* 当前这批数据是否带财务字段（ROE/PB/上市日期）。腾讯源没有，
+       中长线档必须自动降级，否则门槛会把全市场杀成 0 只 */
+    fundamentals: true,
     prog: { done: 0, total: 0 },
-    weights: null,      // 当前生效权重（可被用户改）
-    topN: null,
+    hz: 'S',                 // 当前查看的周期档：S 短线 | M 中线 | L 长线
+    hzPicks: { S: [], M: [], L: [] },   // 三档各自的候选名单
+    hzW: {
+      S: { d1: 32, d2: 28, d3: 8, d4: 18, d5: 7, d6: 7 },
+      M: { d1: 14, d2: 10, d3: 28, d4: 20, d5: 12, d6: 16 },
+      L: { d1: 6, d2: 4, d3: 18, d4: 6, d5: 10, d6: 56 }
+    },
+    hzTopN: { S: 6, M: 4, L: 3 },
+    hzTouched: { S: false, M: false, L: false },
+    histHz: 'S',             // 历史跟踪默认看短线档
     filters: { ind: 'all', minScore: 0, inflow: false, q: '' },
     sort: { k: 'total', dir: -1 },
     hist: [],
-    paper: [],          // 模拟持仓（虚拟买入，存本机 SQLite）
-    paperLoaded: false,     // 持仓是否已从数据库加载完成（防止 tick 竞态）
-    paperEvalPending: false,// 加载未完成时的待执行 tick 标记
     advice: null,       // 每日建议存档（来自数据库）
     ai: null,           // AI 复核结果 { byCode, at, model, plan }
     expanded: {},       // 展开的理由卡片
     timer: null
   };
 
+  /* 记住上次看的是哪一档：刷新后不用每次重新点 */
+  try {
+    var _lastHz = localStorage.getItem('ebgap.pick.hz.v1');
+    if (_lastHz === 'S' || _lastHz === 'M' || _lastHz === 'L') S.hz = _lastHz;
+  } catch (e) { /* ignore */ }
+
   /* ================= 工具 ================= */
   var seq = 0;
   function jsonp(url, timeout) {
-    return new Promise(function (resolve, reject) {
-      var name = 'EBPK_' + Date.now() + '_' + (++seq);
-      var script = document.createElement('script');
-      var done = false;
-      function cleanup() {
-        if (script.parentNode) script.parentNode.removeChild(script);
-        try { delete window[name]; } catch (e) { window[name] = undefined; }
-      }
-      var timer = setTimeout(function () {
-        if (done) return;
-        done = true; cleanup(); reject(new Error('接口超时'));
-      }, timeout || 12000);
-      window[name] = function (data) {
-        if (done) return;
-        done = true; clearTimeout(timer); cleanup(); resolve(data);
-      };
-      script.onerror = function () {
-        if (done) return;
-        done = true; clearTimeout(timer); cleanup(); reject(new Error('接口不可达'));
-      };
-      script.src = url + '&cb=' + name;
-      document.head.appendChild(script);
+    // 统一走本机代理 /api/stock/em（原因见 stock.js 同名注释）
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, timeout || 12000);
+    return fetch('/api/stock/em?u=' + encodeURIComponent(url), {
+      headers: { Accept: 'application/json' }, signal: ctl.signal
+    }).then(function (r) {
+      clearTimeout(timer);
+      return r.json().then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || '接口异常 HTTP ' + r.status);
+        return j;
+      });
+    }, function (e) {
+      clearTimeout(timer);
+      throw new Error(e && e.name === 'AbortError' ? '接口超时' : '接口不可达');
     });
   }
 
@@ -203,7 +261,7 @@
         '如果处在代理 / VPN 环境，<code>push2.eastmoney.com</code> 的全市场列表接口经常被拦截' +
         '（K 线、指数接口可能仍然正常），换成直连网络或给该域名加直连规则即可。已抓到的缓存不受影响。</p>';
     }
-    return '<p>行情经本地服务中转（server.py）获取：默认腾讯财经，失败自动切东方财富。' +
+    return '<p>行情经本地服务中转（server.py）获取：整批优先东方财富，失败自动整批切腾讯财经。' +
       '请确认服务是用<b>启动.command</b>或 <code>python3 server.py</code> 起的' +
       '（纯静态 http.server 没有中转能力），并确认网络能访问 qq.com / eastmoney。之前抓到的缓存不受影响。</p>';
   }
@@ -220,47 +278,63 @@
   }
 
   /* ================= 数据抓取 ================= */
-  /* 走本地服务端中转（server.py 默认腾讯财经优先，失败自动切东财；
-     东财恢复可达时把 server.py 里 PRIMARY_SOURCE 改成 'eastmoney' 即可切回），
-     中转不可用（比如用 python -m http.server 起的站）再退回浏览器直连 JSONP。 */
-  var RELAY = true;
-
-  function clistQuery(pn) {
+  /* 走本地服务端中转（server.py），但整批必须来自同一个源：
+     东财行带 ROE/PB/上市日期，腾讯行没有；混着抓会让中长线档的财务门槛
+     把全市场误杀成 0 只。所以先整批东财，任何一页失败就整批换腾讯。 */
+  function clistQuery(pn, src) {
     return 'pn=' + pn + '&pz=' + PAGE + '&po=1&np=1&fltt=2&invt=2' +
-      '&fid=f12&fs=' + FS + '&fields=' + FIELDS + '&_=' + Date.now();
+      '&fid=f12&fs=' + FS + '&fields=' + FIELDS + (src ? '&src=' + src : '') + '&_=' + Date.now();
   }
 
-  function fetchPage(pn) {
-    var q = clistQuery(pn);
-    if (RELAY) {
-      return fetch('/api/market/list?' + q, { cache: 'no-store' })
-        .then(function (r) {
-          if (!r.ok) throw new Error('中转 http ' + r.status);
-          return r.json();
-        })
-        .then(function (j) {
-          if (!j || !j.data) throw new Error('中转返回为空');
-          if (j.data.src) S.src = j.data.src;
-          return j;
-        })
-        .catch(function () {
-          RELAY = false;   // 中转不可用，本次及之后都走直连
-          return jsonp(API + '/api/qt/clist/get?' + q, 12000);
+  function fetchPage(pn, src) {
+    return fetch('/api/market/list?' + clistQuery(pn, src), { cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('中转 http ' + r.status);
+        return r.json();
+      })
+      .then(function (j) {
+        if (!j || !j.data || !Array.isArray(j.data.diff)) throw new Error('中转返回为空');
+        return j;
+      });
+  }
+
+  function fetchPages(src) {
+    return fetchPage(1, src).then(function (first) {
+      var data = first.data;
+      if (!data.diff.length) throw new Error('行情接口返回为空');
+      var total = data.total || data.diff.length;
+      var pages = Math.ceil(total / PAGE);
+      S.prog = { done: 1, total: pages };
+      renderState();
+
+      var rows = data.diff.slice();
+      var rest = [];
+      for (var p = 2; p <= pages; p++) rest.push(p);
+
+      return pool(rest, POOL_CONCURRENCY, function (pn) {
+        return fetchPage(pn, src).then(function (j) {
+          S.prog.done++;
+          if (S.prog.done % 6 === 0) renderState();
+          return j.data.diff;
         });
-    }
-    return jsonp(API + '/api/qt/clist/get?' + q, 12000);
+      }).then(function (chunks) {
+        chunks.forEach(function (c) { rows = rows.concat(c); });
+        return { rows: rows, src: data.src || (src === 'tx' ? 'tencent' : 'eastmoney') };
+      });
+    });
   }
 
   function pageUrl(pn) {
     return API + '/api/qt/clist/get?' + clistQuery(pn);
   }
 
-  /* 工具栏右侧的数据源标记：让「用的哪路数据」一眼可见 */
+  /* 工具栏右侧的数据源标记：让「用的哪路数据、缺了什么」一眼可见 */
   function renderSrc() {
     var box = document.querySelector('#v-pick .pk-tool-src');
     if (!box) return;
     if (S.src === 'tencent') {
-      box.innerHTML = '<i></i>数据源：腾讯财经 · 本地计算（行业维度按板块近似）';
+      box.innerHTML = '<i></i>数据源：腾讯财经 · 本地计算（缺 ROE/PB/上市日期，' +
+        '<b>财务门槛已关闭</b>，中长线档仅供参考）';
     } else if (S.src === 'eastmoney') {
       box.innerHTML = '<i></i>东方财富公开行情 · 本地计算';
     }
@@ -288,40 +362,30 @@
     S.prog = { done: 0, total: 0 };
     renderState();
 
-    return fetchPage(1).then(function (first) {
-      var data = first && first.data;
-      if (!data || !data.diff || !data.diff.length) throw new Error('行情接口返回为空');
-      var total = data.total || data.diff.length;
-      var pages = Math.ceil(total / PAGE);
-      S.prog = { done: 1, total: pages };
-      renderState();
-
-      var rows = data.diff.slice();
-      var rest = [];
-      for (var p = 2; p <= pages; p++) rest.push(p);
-
-      return pool(rest, POOL_CONCURRENCY, function (pn) {
-        return fetchPage(pn).then(function (j) {
-          S.prog.done++;
-          if (S.prog.done % 6 === 0) renderState();
-          var d = j && j.data && j.data.diff;
-          return Array.isArray(d) ? d : [];
+    return fetchPages('em')
+      .catch(function (emErr) {
+        /* 东财任一页失败：整批改用腾讯，宁可少几个字段，也不要两份数据混在一起 */
+        S.prog = { done: 0, total: 0 };
+        renderState();
+        return fetchPages('tx').catch(function (txErr) {
+          throw new Error('东财与腾讯均失败：' + (emErr && emErr.message) + ' / ' + (txErr && txErr.message));
         });
-      }).then(function (chunks) {
-        chunks.forEach(function (c) { rows = rows.concat(c); });
-        return rows;
-      });
-    }).then(function (rows) {
-      var seen = {};
-      var out = [];
-      rows.forEach(function (d) {
-        var r = parseRow(d);
-        if (!r.code || seen[r.code]) return;
-        seen[r.code] = 1;
-        out.push(r);
-      });
-      return Promise.all([Promise.resolve(out), fetchIndex()]);
-    }).then(function (res) {
+      })
+      .then(function (res) {
+        var rows = res.rows;
+        S.src = res.src;
+        /* 腾讯源没有 ROE/PB/上市日期：中长线档据此走降级门槛，界面也会标注 */
+        S.fundamentals = res.src === 'eastmoney';
+        var seen = {};
+        var out = [];
+        rows.forEach(function (d) {
+          var r = parseRow(d);
+          if (!r.code || seen[r.code]) return;
+          seen[r.code] = 1;
+          out.push(r);
+        });
+        return Promise.all([Promise.resolve(out), fetchIndex()]);
+      }).then(function (res) {
       S.raw = res[0];
       var idx = res[1] || {};
       S.at = new Date();
@@ -347,11 +411,10 @@
   function fetchIndex() {
     var q = 'fltt=2&secids=1.000001,0.399001,0.399006,1.000300' +
       '&fields=f2,f3,f6,f12,f14,f124&_=' + Date.now();
-    var req = RELAY
-      ? fetch('/api/market/index?' + q, { cache: 'no-store' })
-          .then(function (r) { if (!r.ok) throw new Error('index http ' + r.status); return r.json(); })
-          .catch(function () { return jsonp(API + '/api/qt/ulist.np/get?' + q, 10000); })
-      : jsonp(API + '/api/qt/ulist.np/get?' + q, 10000);
+    // 与 fetchPage 同策略：中转优先，当次失败才退直连代理（ulist 被拦时代理有腾讯兜底）
+    var req = fetch('/api/market/index?' + q, { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('index http ' + r.status); return r.json(); })
+      .catch(function () { return jsonp(API + '/api/qt/ulist.np/get?' + q, 10000); });
     return req.then(function (j) {
       var diff = (j && j.data && j.data.diff) || [];
       var out = { list: [], amt: 0, date: null, pct: 0 };
@@ -471,14 +534,20 @@
     var map = {};
     rows.forEach(function (r) {
       if (!(r.price > 0) || !r.amt) return;
-      var g = map[r.ind] || (map[r.ind] = { name: r.ind, n: 0, sumPct: 0, net: 0, amt: 0, up: 0 });
+      var g = map[r.ind] || (map[r.ind] = { name: r.ind, n: 0, sumPct: 0, net: 0, amt: 0, up: 0, pes: [] });
       g.n++; g.sumPct += r.pct; g.net += r.net; g.amt += r.amt;
       if (r.pct > 0) g.up++;
+      /* 行业 PE 中位数：长线档判断「贵不贵」必须有行业参照，
+         否则银行 6 倍和软件 60 倍会被放在同一把尺子上 */
+      if (r.pe > 0 && r.pe < 500) g.pes.push(r.pe);
     });
     var list = Object.keys(map).map(function (k) {
       var g = map[k];
       g.avgPct = g.n ? g.sumPct / g.n : 0;
       g.pctl = 0.5;
+      g.pes.sort(function (a, b) { return a - b; });
+      g.peMed = g.pes.length ? g.pes[Math.floor(g.pes.length / 2)] : null;
+      delete g.pes;
       return g;
     }).filter(function (g) { return g.n >= 4; });
     list.sort(function (a, b) { return b.avgPct - a.avgPct; });
@@ -585,6 +654,9 @@
   }
 
   function scoreQuality(r) {
+    /* 腾讯源没有 ROE / 净利 / PE：缺失不等于很差，给中性分，
+       否则整批票都会被当成「亏损 + 低质量」统一扣 24 分 */
+    if (!S.fundamentals) return 50;
     var s = 50, roe = r.roe, np = r.npYoY, pe = r.pe;
     if (roe >= 15) s += 22; else if (roe >= 8) s += 12; else if (roe >= 3) s += 4; else if (roe < 0) s -= 18;
     if (np >= 50) s += (np > 300 ? 9 : 16); else if (np >= 15) s += 10; else if (np >= 0) s += 4; else if (np >= -30) s -= 12; else s -= 18;
@@ -592,160 +664,429 @@
     return clamp(Math.round(s), 0, 100);
   }
 
-  /* 硬性排雷：返回剔除原因，null 表示保留 */
-  function rejectReason(r) {
+  /* 估值分：长线档的核心维度。
+     绝对 PE + 行业相对 PE + PB + ROE/增速，四个角度合成，
+     单看任何一个都会被「行业天然高估值」带偏。 */
+  function scoreValue(r) {
+    var st = S.indStats && S.indStats.map[r.ind];
+    var peMed = st && st.peMed > 0 ? st.peMed : null;
+    var s = 50;
+    var soft = !S.fundamentals;   // 源里没有财务字段时，缺失不等于很差，不扣分
+
+    if (!(r.pe > 0)) { if (!soft) s -= 30; }
+    else if (r.pe <= 12) s += 20;
+    else if (r.pe <= 20) s += 14;
+    else if (r.pe <= 30) s += 6;
+    else if (r.pe <= 50) s -= 5;
+    else if (r.pe <= 80) s -= 15;
+    else s -= 25;
+
+    if (r.pe > 0 && peMed) {
+      var rel = r.pe / peMed;
+      if (rel <= 0.7) s += 18;
+      else if (rel <= 0.9) s += 12;
+      else if (rel <= 1.15) s += 5;
+      else if (rel <= 1.5) s -= 6;
+      else if (rel <= 2) s -= 15;
+      else s -= 23;
+    }
+
+    if (r.pb > 0) {
+      if (r.pb < 1) s += 10;
+      else if (r.pb <= 2) s += 6;
+      else if (r.pb <= 5) s += 0;
+      else if (r.pb <= 8) s -= 8;
+      else s -= 14;
+    }
+
+    if (!soft) {
+      if (r.roe >= 20) s += 14;
+      else if (r.roe >= 15) s += 10;
+      else if (r.roe >= 10) s += 5;
+      else if (r.roe < 5) s -= 10;
+
+      if (r.npYoY >= 30) s += 10;
+      else if (r.npYoY >= 10) s += 6;
+      else if (r.npYoY < -20) s -= 12;
+    }
+
+    return clamp(Math.round(s), 0, 100);
+  }
+
+  function listedDays(r) {
+    var s = String(r.listDate || '');
+    if (s.length !== 8) return null;
+    var d = new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8));
+    return (Date.now() - d.getTime()) / 86400000;
+  }
+
+  /* 通用硬性排雷：与周期无关，只排「根本不能碰」的 */
+  function baseReject(r) {
     if (!(r.price > 0)) return '停牌 / 无成交';
     if (/ST|退/.test(r.name)) return 'ST 或退市风险';
     if (/^[NC]/.test(r.name)) return '新股 / 次新';
-    if (r.listDate) {
-      var s = String(r.listDate);
-      if (s.length === 8) {
-        var d = new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8));
-        if ((Date.now() - d.getTime()) / 86400000 < 60) return '上市不足 60 日';
-      }
-    }
-    if (r.amt < 1.5e8) return '成交额不足 1.5 亿';
-    if (r.turn > 25) return '换手率过热（>25%）';
-    if (r.pct <= -5) return '当日破位（跌超 5%）';
-    if (r.pct >= limitOf(r.code) - 0.3 && r.price >= r.high) return '已封涨停，买不进';
+    if (!(r.amt > 0)) return '无成交额';
     return null;
+  }
+
+  /* 周期专属门槛：这是三档名单真正拉开差距的地方。
+     短线要「能进出、有量」，中线要「趋势没过热、基本面无雷」，
+     长线要「好公司 + 好价格 + 活得久」。 */
+  function horizonReject(r, k) {
+    var g = HZ_RULE[k];
+    var soft = !S.fundamentals;
+    var days = listedDays(r);
+    if (g.minList && days !== null && days < g.minList) {
+      return g.minList >= 365 ? '上市不足 2 年' : '上市不足 ' + g.minList + ' 日';
+    }
+    if (r.amt < g.minAmt) return '成交额不足 ' + (g.minAmt / 1e8) + ' 亿';
+    if (r.turn > g.maxTurn) return '换手 >' + g.maxTurn + '% 过热';
+    if (r.cap < g.minCap) return '市值不足 ' + (g.minCap / 1e8) + ' 亿';
+    if (g.minPct != null && r.pct <= g.minPct) return '当日破位（跌超 ' + (-g.minPct) + '%）';
+    if (g.maxD60 != null && r.d60 > g.maxD60) return '60 日涨幅 >' + g.maxD60 + '%（位置过高）';
+    if (g.minD60 != null && r.d60 < g.minD60) return '60 日跌幅 >' + (-g.minD60) + '%（趋势未止）';
+    /* 腾讯源没有 ROE / 净利 / 上市日期：这几个门槛一旦照常执行，
+       中长线档会把全市场杀成 0 只（0 值被当成「极差」）。
+       此时只保留量价与规模这类真实可得的硬门槛，财务门槛关闭，
+       并在数据源标记里写明「财务门槛已关闭」，不假装有数据。 */
+    if (!soft) {
+      if (g.minRoe != null && !(r.roe >= g.minRoe)) return 'ROE 低于 ' + g.minRoe + '%';
+      if (g.minNp != null && isFinite(r.npYoY) && r.npYoY < g.minNp) return '净利同比 <-' + (-g.minNp) + '%';
+      if (g.needProfit) {
+        if (!(r.pe > 0)) return '当前亏损';
+        if (r.pe > g.maxPe) return 'PE >' + g.maxPe + ' 倍';
+      }
+    } else if (g.needProfit && r.pe > 0 && r.pe > g.maxPe) {
+      /* 有 PE 就顺手排掉明显贵的，没有就放过 */
+      return 'PE >' + g.maxPe + ' 倍';
+    }
+    /* 短线不接已封板的票；中长线可以等回调，不在此剔除 */
+    if (k === 'S' && r.pct >= limitOf(r.code) - 0.3 && r.price >= r.high) return '已封涨停，买不进';
+    return null;
+  }
+
+  function bumpDrop(bag, why) {
+    var k = why.replace(/（.*?）/g, '').replace(/，.*$/, '');
+    bag[k] = (bag[k] || 0) + 1;
+  }
+
+  function dimScores(r) {
+    var f = scoreFund(r), p = scorePrice(r), pos = scorePosition(r), ind = scoreIndustry(r);
+    var liq = scoreLiquidity(r), q = scoreQuality(r), val = scoreValue(r);
+    return {
+      scores: { d1: f.v, d2: p.v, d3: pos, d4: ind.v, d5: liq, d6: q },
+      value: val,
+      netRatio: f.ratio, closePos: p.pos,
+      indAvgPct: ind.avgPct, indRank: ind.rank, indCount: ind.n
+    };
+  }
+
+  /* 合成某档的综合分：六维加权 + 估值固定占比（短 0 / 中 16% / 长 38%） */
+  function composite(d, k) {
+    var w = S.hzW[k] || HZ[k].w;
+    var sum = 0, wSum = 0;
+    DIM.forEach(function (x) {
+      var ww = w[x.key] || 0;
+      sum += d.scores[x.key] * ww;
+      wSum += ww;
+    });
+    var base = wSum ? sum / wSum : 0;
+    var vw = HZ[k].vw || 0;
+    return Math.round((base * (1 - vw) + d.value * vw) * 10) / 10;
+  }
+
+  function topNOf(k) {
+    var n = S.hzTopN[k];
+    if (n == null) n = HZ[k].topN;
+    /* 行情弱时只收缩短线档，中长线不因为一天的情绪被动砍名单 */
+    if (k === 'S') {
+      var cfg = REGIME[S.regimeKey];
+      if (cfg && !S.hzTouched.S) n = Math.min(n, cfg.sTopN);
+    }
+    return clamp(n, 1, 12);
+  }
+
+  function shallow(o) {
+    var r = {};
+    for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) r[k] = o[k];
+    return r;
   }
 
   function compute() {
     if (!S.raw) return;
-    var w = S.weights || W_BASE;
-    var wSum = DIM.reduce(function (a, d) { return a + (w[d.key] || 0); }, 0) || 100;
-    var all = [], dropped = {};
+    var active = S.hz;
+    var universe = [], drops = { S: {}, M: {}, L: {} };
+    var minScore = S.filters.minScore || 0;
 
     S.raw.forEach(function (r) {
-      var why = rejectReason(r);
-      if (why) {
-        var k = why.replace(/（.*?）/g, '').replace(/，.*$/, '');
-        dropped[k] = (dropped[k] || 0) + 1;
-        return;
-      }
-      var f = scoreFund(r), p = scorePrice(r), pos = scorePosition(r), ind = scoreIndustry(r);
-      var liq = scoreLiquidity(r), q = scoreQuality(r);
-      var scores = { d1: f.v, d2: p.v, d3: pos, d4: ind.v, d5: liq, d6: q };
-      var total = 0;
-      DIM.forEach(function (d) { total += scores[d.key] * (w[d.key] || 0); });
-      total = total / wSum;
+      var base = baseReject(r);
+      if (base) { HZ_ORDER.forEach(function (k) { bumpDrop(drops[k], base); }); return; }
+
+      var d = dimScores(r);
+      var hs = {}, okHz = {};
+      HZ_ORDER.forEach(function (k) {
+        var why = horizonReject(r, k);
+        if (why) { okHz[k] = false; hs[k] = null; bumpDrop(drops[k], why); }
+        else { okHz[k] = true; hs[k] = composite(d, k); }
+      });
+      if (!okHz.S && !okHz.M && !okHz.L) return;
+
       var s = {
         code: r.code, name: r.name, ind: r.ind, price: r.price, pct: r.pct,
-        amt: r.amt, turn: r.turn, volRatio: r.volRatio, cap: r.cap,
+        amt: r.amt, turn: r.turn, volRatio: r.volRatio, cap: r.cap, amp: r.amp,
         pe: r.pe, pb: r.pb, roe: r.roe, npYoY: r.npYoY,
-        d60: r.d60, ytd: r.ytd, net: r.net, netRatio: f.ratio,
+        d60: r.d60, ytd: r.ytd, net: r.net, netRatio: d.netRatio,
         high: r.high, low: r.low, open: r.open,
-        closePos: p.pos, indAvgPct: ind.avgPct, indRank: ind.rank, indCount: ind.n,
-        scores: scores, total: Math.round(total * 10) / 10
+        closePos: d.closePos, indAvgPct: d.indAvgPct, indRank: d.indRank, indCount: d.indCount,
+        scores: d.scores, value: d.value,
+        hs: hs, okHz: okHz,
+        total: okHz[active] ? hs[active] : 0
       };
-      s.reasons = buildReasons(s);
-      s.risks = buildRisks(s);
-      all.push(s);
+      universe.push(s);
     });
 
-    all.sort(function (a, b) { return b.total - a.total; });
-    /* 记下全市场排名：表格里显示真实名次，而不是排序后的行号 */
-    all.forEach(function (s, i) { s.rankAll = i + 1; });
-    S.scored = all;
-    S.dropped = dropped;
+    /* 当前档的候选池（表格用），按当前档得分排序 */
+    var pool = universe.filter(function (s) { return s.okHz[active]; });
+    pool.sort(function (a, b) { return b.hs[active] - a.hs[active]; });
+    pool.forEach(function (s, i) { s.rankAll = i + 1; });
+    S.scored = pool;
+    S.dropped = drops[active];
+    S.allDropped = drops;
+    S.universe = universe;
 
     /* 行情判定 */
     var temp = S.mkt ? S.mkt.temp : 50;
-    var autoKey = regimeOf(temp);
-    S.autoKey = autoKey;
-    S.regimeKey = S.mode === 'auto' ? autoKey : S.mode;
-    var cfg = REGIME[S.regimeKey];
-    if (!S.weightsTouched) S.weights = cloneW(cfg.w);
-    if (!S.topNTouched) S.topN = cfg.topN;
-    /* 「最低综合分」是全局门槛：既筛候选池，也筛今日名单 */
-    var minScore = S.filters.minScore || 0;
-    var pool2 = minScore > 0 ? all.filter(function (s) { return s.total >= minScore; }) : all;
-    S.picks = pool2.slice(0, S.topN).map(function (s, i) {
-      s.rank = i + 1;
-      s.plan = buildPlan(s);
-      return s;
+    S.autoKey = regimeOf(temp);
+    S.regimeKey = S.mode === 'auto' ? S.autoKey : S.mode;
+
+    /* 三档名单：各自排序、各自截断、各自生成交易计划 */
+    HZ_ORDER.forEach(function (k) {
+      var list = universe.filter(function (s) { return s.okHz[k]; });
+      list.sort(function (a, b) { return b.hs[k] - a.hs[k]; });
+      var eligible = minScore > 0 ? list.filter(function (s) { return s.hs[k] >= minScore; }) : list;
+      S.hzPicks[k] = eligible.slice(0, topNOf(k)).map(function (base, i) {
+        var s = shallow(base);
+        s.hzKey = k;
+        s.total = base.hs[k];
+        s.rank = i + 1;
+        s.reasons = buildReasons(s, k);
+        s.risks = buildRisks(s, k);
+        s.plan = buildPlan(s, k);
+        return s;
+      });
     });
-    all.forEach(function (s) { if (s.rank === undefined) s.rank = null; });
+    S.picks = S.hzPicks[active] || [];
+    S.allPicks = [];
+    HZ_ORDER.forEach(function (k) { S.allPicks = S.allPicks.concat(S.hzPicks[k]); });
+
     /* 行情更新后核对模拟持仓的止损/止盈纪律 */
     paperEval();
   }
 
-  function cloneW(w) {
-    return { d1: w.d1, d2: w.d2, d3: w.d3, d4: w.d4, d5: w.d5, d6: w.d6 };
+  function bestHzOf(s) {
+    var best = null, bv = -1;
+    HZ_ORDER.forEach(function (k) {
+      if (s.okHz[k] && s.hs[k] > bv) { bv = s.hs[k]; best = k; }
+    });
+    return best;
   }
 
-  function buildReasons(s) {
-    var out = [];
-    var funds = [];
-    if (s.net > 0) {
-      funds.push({ w: s.scores.d1, t: '主力净流入 <b>' + fx(s.net / 1e8, 2) + ' 亿</b>，占成交额 <b>' + fx(s.netRatio, 1) + '%</b>' });
-    } else {
-      funds.push({ w: s.scores.d1 - 20, t: '主力净流出 ' + fx(-s.net / 1e8, 2) + ' 亿，资金面偏弱' });
-    }
-    out.push(funds[0]);
+  function posText(s) {
+    if (s.d60 > 60) return '位置已偏高，属趋势延续型';
+    if (s.d60 > 30) return '趋势已走了一段，属中后段';
+    if (s.d60 < -15) return '仍在低位区，属超跌修复型';
+    return '处在「启动—中段」区间';
+  }
 
+  function peText(s) {
+    return s.pe > 0 ? fx(s.pe, 1) + ' 倍' : '亏损';
+  }
+
+  function indPeText(s) {
+    var st = S.indStats && S.indStats.map[s.ind];
+    return (st && st.peMed > 0) ? '，行业中位 ' + fx(st.peMed, 1) + ' 倍' : '';
+  }
+
+  /* 入选理由：同一只票在三档里该被什么理由说服，是不一样的。
+     短线看资金/量价，中线看趋势/景气，长线看质量/估值。 */
+  function buildReasons(s, k) {
+    var out = [];
     out.push({
-      w: s.scores.d2,
+      w: k === 'S' ? s.scores.d1 : k === 'M' ? s.scores.d1 * 0.7 : s.scores.d1 * 0.35,
+      t: s.net >= 0
+        ? '主力净流入 <b>' + fx(s.net / 1e8, 2) + ' 亿</b>，占成交额 <b>' + fx(s.netRatio, 1) + '%</b>'
+        : '主力净流出 ' + fx(-s.net / 1e8, 2) + ' 亿，资金面偏弱'
+    });
+    out.push({
+      w: k === 'S' ? s.scores.d2 : k === 'M' ? s.scores.d2 * 0.55 : 18,
       t: '涨 <b>' + signedPct(s.pct) + '</b>、换手 <b>' + fx(s.turn, 1) + '%</b>、量比 <b>' + fx(s.volRatio, 2) +
         '</b>，收盘站在当日振幅 <b>' + fx(s.closePos * 100, 0) + '%</b> 位置'
     });
     out.push({
-      w: s.scores.d3,
-      t: '近 60 日 <b>' + signedPct(s.d60) + '</b>、年内 <b>' + signedPct(s.ytd) + '</b>，' +
-        (s.d60 > 60 ? '位置已偏高，属趋势延续型' : s.d60 < -15 ? '仍在低位区，属超跌修复型' : '处在「启动—中段」区间')
+      w: k === 'S' ? s.scores.d3 : k === 'M' ? s.scores.d3 * 1.15 : s.scores.d3 * 1.2,
+      t: '近 60 日 <b>' + signedPct(s.d60) + '</b>、年内 <b>' + signedPct(s.ytd) + '</b>，' + posText(s)
     });
     if (s.indRank) {
       out.push({
-        w: s.scores.d4,
+        w: k === 'S' ? s.scores.d4 : s.scores.d4 * 1.1,
         t: '所属行业「' + esc(s.ind) + '」今日均值 <b>' + signedPct(s.indAvgPct) + '</b>，行业排名 <b>' +
           s.indRank + '/' + s.indCount + '</b>'
       });
     }
-    out.push({
-      w: s.scores.d6,
-      t: 'ROE <b>' + (s.roe ? fx(s.roe, 1) + '%' : '—') + '</b>、净利同比 <b>' + (isFinite(s.npYoY) ? signedPct(s.npYoY, 1) : '—') +
-        '</b>、PE(TTM) <b>' + (s.pe > 0 ? fx(s.pe, 1) + ' 倍' : '亏损') + '</b>'
+    /* 财务与估值两个维度：源里没有这些字段时整行不出，
+       免得给用户一行全是「—」的「入选理由」 */
+    if (S.fundamentals) out.push({
+      w: k === 'L' ? s.scores.d6 * 1.25 : s.scores.d6,
+      t: 'ROE <b>' + (isFinite(s.roe) ? fx(s.roe, 1) + '%' : '—') + '</b>、净利同比 <b>' +
+        (isFinite(s.npYoY) ? signedPct(s.npYoY, 1) : '—') + '</b>、PE(TTM) <b>' + peText(s) + '</b>'
+    });
+    if (S.fundamentals) out.push({
+      w: k === 'L' ? s.value * 1.3 : k === 'M' ? s.value * 0.9 : s.value * 0.5,
+      t: '估值 PE <b>' + peText(s) + '</b>、PB <b>' + (s.pb > 0 ? fx(s.pb, 2) : '—') + '</b>' +
+        indPeText(s) + '，估值分 <b>' + s.value + '</b>'
     });
     out.push({
-      w: s.scores.d5,
+      w: k === 'L' ? s.scores.d5 * 1.1 : s.scores.d5 * 0.8,
       t: '成交额 <b>' + fAmt(s.amt) + '</b>、总市值 <b>' + fx(s.cap / 1e8, 0) + ' 亿</b>，流动性够进出'
     });
 
     return out.sort(function (a, b) { return b.w - a.w; }).slice(0, 4).map(function (x) { return x.t; });
   }
 
-  function buildRisks(s) {
+  /* 风险提示也按周期换口径：长线不该因为「当天涨了 7%」被劝退，
+     短线也不该因为「PE 60 倍」被判死刑（那是长线的顾虑）。 */
+  function buildRisks(s, k) {
     var out = [];
-    if (s.turn > 15) out.push('换手 ' + fx(s.turn, 1) + '%，短线筹码拥挤');
-    if (s.pct >= 7) out.push('当日已涨 ' + signedPct(s.pct) + '，追高溢价风险');
-    if (s.d60 > 50) out.push('近 60 日已涨 ' + signedPct(s.d60) + '，位置偏高');
-    if (s.pct >= limitOf(s.code) - 1.2) out.push('接近涨停，次日高开需谨慎');
-    if (s.net < 0) out.push('主力当日净流出 ' + fx(-s.net / 1e8, 2) + ' 亿');
-    if (s.pe <= 0) out.push('当前亏损，纯资金驱动');
-    else if (s.pe > 100) out.push('PE ' + fx(s.pe, 0) + ' 倍，估值透支');
-    if (s.cap < 50e8) out.push('市值 ' + fx(s.cap / 1e8, 0) + ' 亿，波动偏大');
-    if (s.indAvgPct < 0) out.push('所属行业今日整体走弱');
-    if (s.roe < 3) out.push('ROE 偏低，基本面支撑弱');
-    if (!out.length) out.push('未触发硬性风险项，但短线波动仍可能击穿止损');
+    if (k === 'S') {
+      if (s.turn > 15) out.push('换手 ' + fx(s.turn, 1) + '%，短线筹码拥挤');
+      if (s.pct >= 7) out.push('当日已涨 ' + signedPct(s.pct) + '，追高溢价风险');
+      if (s.d60 > 50) out.push('近 60 日已涨 ' + signedPct(s.d60) + '，位置偏高');
+      if (s.pct >= limitOf(s.code) - 1.2) out.push('接近涨停，次日高开需谨慎');
+      if (s.net < 0) out.push('主力当日净流出 ' + fx(-s.net / 1e8, 2) + ' 亿');
+      if (S.fundamentals) {
+        if (s.pe <= 0) out.push('当前亏损，纯资金驱动');
+        else if (s.pe > 100) out.push('PE ' + fx(s.pe, 0) + ' 倍，估值透支');
+      }
+      if (s.cap < 50e8) out.push('市值 ' + fx(s.cap / 1e8, 0) + ' 亿，波动偏大');
+      if (s.indAvgPct < 0) out.push('所属行业今日整体走弱');
+      if (S.fundamentals && s.roe < 3) out.push('ROE 偏低，基本面支撑弱');
+    } else if (k === 'M') {
+      if (s.d60 > 40) out.push('近 60 日已涨 ' + signedPct(s.d60) + '，趋势进入后段');
+      if (s.turn > 12) out.push('换手 ' + fx(s.turn, 1) + '%，短线筹码偏热');
+      if (S.fundamentals) {
+        if (s.pe > 80) out.push('PE ' + fx(s.pe, 0) + ' 倍，估值偏高');
+      }
+      if (s.net < 0) out.push('主力当日净流出 ' + fx(-s.net / 1e8, 2) + ' 亿，需看是否连续');
+      if (S.fundamentals && s.roe < 5) out.push('ROE ' + fx(s.roe, 1) + '%，基本面支撑偏弱');
+      if (s.indAvgPct < -1) out.push('所属行业今日整体走弱');
+      if (s.cap < 60e8) out.push('市值 ' + fx(s.cap / 1e8, 0) + ' 亿，波动偏大');
+    } else {
+      if (S.fundamentals) {
+        if (s.roe < 12) out.push('ROE ' + fx(s.roe, 1) + '%，低于长线优选线（15%）');
+        if (s.pe > 40) out.push('PE ' + fx(s.pe, 0) + ' 倍，估值缺乏安全垫');
+        if (isFinite(s.npYoY) && s.npYoY < 0) out.push('净利同比 ' + signedPct(s.npYoY, 1) + '，业绩在收缩');
+      }
+      if (s.d60 > 40) out.push('近 60 日已涨 ' + signedPct(s.d60) + '，建仓位置不便宜');
+      if (s.cap < 150e8) out.push('市值 ' + fx(s.cap / 1e8, 0) + ' 亿，长线波动与流动性风险偏高');
+      if (s.indAvgPct < -2) out.push('所属行业短期走弱，注意景气拐点');
+    }
+    /* 财务字段缺失时，这本身就是最该先看到的一条风险，放最前面 */
+    if (!S.fundamentals && k !== 'S') out.unshift('数据源未提供财务字段，业绩与估值需自行核对');
+    if (!out.length) {
+      out.push(k === 'L' ? '未触发硬性风险项，但需按季报持续验证'
+        : k === 'M' ? '未触发硬性风险项，但趋势中途可能出现 10% 级别回撤'
+          : '未触发硬性风险项，但短线波动仍可能击穿止损');
+    }
     return out.slice(0, 3);
   }
 
-  function buildPlan(s) {
+  /* 建议持有天数：不是拍一个固定值，而是按波动特征与所处位置推出来 */
+  function holdPlan(s, k) {
+    var amp = s.amp > 0 ? s.amp : Math.max(Math.abs(s.pct), 1.2);
+    var lo, hi, basis;
+
+    if (k === 'S') {
+      var daily = clamp(amp * 0.6 + s.turn / 12, 1.0, 8);
+      var need = (HZ.S.t1 * 100) / daily;
+      lo = clamp(Math.round(need * 0.8), 1, 4);
+      hi = clamp(Math.round(need * 1.4) + 1, lo + 1, 5);
+      if (s.volRatio >= 2 && s.turn >= 3) { lo = 1; hi = Math.max(2, hi - 1); }
+      basis = '日均振幅 ' + fx(amp, 1) + '%、换手 ' + fx(s.turn, 1) + '%，按 +' +
+        fx(HZ.S.t1 * 100, 1) + '% 第一目标估需 ' + lo + '–' + hi + ' 个交易日' +
+        (s.volRatio >= 2 ? '；量比 ' + fx(s.volRatio, 2) + '，节奏偏快' : '');
+    } else if (k === 'M') {
+      if (s.d60 > 35) {
+        lo = 10; hi = 18;
+        basis = '近 60 日已涨 ' + signedPct(s.d60, 1) + '，趋势到中后段，压缩到 2–4 周，见滞涨就减';
+      } else if (s.d60 < 5) {
+        lo = 20; hi = 32;
+        basis = '近 60 日 ' + signedPct(s.d60, 1) + '，仍在启动前段，给 4–6 周等趋势展开';
+      } else {
+        lo = 14; hi = 24;
+        basis = '近 60 日 ' + signedPct(s.d60, 1) + '，处在启动—中段，按 3–5 周持有';
+      }
+      if (s.pe > 60) {
+        lo = Math.max(8, lo - 4);
+        hi = Math.max(lo + 4, hi - 6);
+        basis += '；PE ' + fx(s.pe, 0) + ' 倍偏高，缩短验证窗口';
+      }
+    } else {
+      if (!S.fundamentals) {
+        /* 没有财务数据就只按位置给区间，不编「ROE 0%、PE 0 倍」这种假依据 */
+        if (s.d60 > 30) {
+          lo = 60; hi = 90;
+          basis = '缺财务数据，近 60 日 ' + signedPct(s.d60, 1) + ' 位置不低，先按 3–4 个月试仓';
+        } else {
+          lo = 90; hi = 150;
+          basis = '缺财务数据，仅按位置给 4–7 个月区间，业绩需自行核对';
+        }
+      } else if (s.roe >= 15 && s.pe > 0 && s.pe <= 25) {
+        lo = 120; hi = 180;
+        basis = 'ROE ' + fx(s.roe, 1) + '%、PE ' + fx(s.pe, 1) + ' 倍，质优价低，按 6–9 个月拿';
+      } else if (s.pe > 40 || s.d60 > 40) {
+        lo = 60; hi = 90;
+        basis = 'PE ' + peText(s) + '、近 60 日 ' + signedPct(s.d60, 1) + '，先按 3–4 个月验证，不加仓';
+      } else {
+        lo = 90; hi = 150;
+        basis = 'ROE ' + fx(s.roe, 1) + '%、PE ' + fx(s.pe, 1) + ' 倍，按 4–7 个月持有，等季报验证';
+      }
+    }
+
+    var approx = k === 'S'
+      ? '约 ' + lo + '–' + hi + ' 天'
+      : k === 'M'
+        ? '约 ' + Math.max(2, Math.round(lo / 5)) + '–' + Math.round(hi / 5) + ' 周'
+        : '约 ' + Math.round(lo / 21) + '–' + Math.round(hi / 21) + ' 个月';
+
+    return { lo: lo, hi: hi, label: lo + '–' + hi + ' 个交易日', approx: approx, basis: basis };
+  }
+
+  function buildPlan(s, k) {
+    var hz = HZ[k];
     var price = s.price;
-    var base = s.total >= 90 ? 15 : s.total >= 85 ? 13 : s.total >= 80 ? 11 : s.total >= 75 ? 9 : 7;
+    var hp = holdPlan(s, k);
+
+    /* 已走完一大段的票，目标空间要打折，否则等于假设它还能再翻一倍 */
+    var damp = 1 - clamp((Math.max(0, s.d60 - 30)) / 250, 0, 0.25);
+    /* 波动大的票止损给宽一点，否则正常震荡就被扫出去 */
+    var stopPct = hz.stop * clamp(0.8 + (s.amp || 2) / 25, 0.85, 1.35);
+
+    var band = s.total >= 90 ? 0 : s.total >= 85 ? 1 : s.total >= 80 ? 2 : s.total >= 75 ? 3 : 4;
     var i = (s.rank || 1) - 1;
-    var pos = Math.round(base * (1 - 0.06 * i));
-    if (S.regimeKey === 'defense') pos = Math.round(pos * 0.6);
-    else if (S.regimeKey === 'neutral') pos = Math.round(pos * 0.85);
+    var cfg = REGIME[S.regimeKey] || REGIME.neutral;
+    var pos = Math.round(hz.posBase[band] * (1 - 0.06 * i) * cfg.posMul);
     pos = Math.max(pos, 3);
+
     return {
-      buyLow: price * 0.985,
-      buyHigh: price * 1.005,
-      stop: price * 0.955,
-      t1: price * 1.055,
-      t2: price * 1.09,
-      hold: '1–2 个交易日',
+      buyLow: price * (1 - hz.buyLow),
+      buyHigh: price * (1 + hz.buyHigh),
+      stop: price * (1 - stopPct),
+      t1: price * (1 + hz.t1 * damp),
+      t2: price * (1 + hz.t2 * damp),
+      hold: hp.label,
+      holdNote: hp.approx,
+      holdBasis: hp.basis,
+      hz: k,
       pos: pos
     };
   }
@@ -759,14 +1100,15 @@
     S.hist = S.hist.filter(function (h) { return h && h.date && h.date <= today; });
   }
   function recordHistory() {
-    if (!S.picks || !S.picks.length || !S.quoteDate) return;
+    if (!S.allPicks || !S.allPicks.length || !S.quoteDate) return;
     loadHist();
     var day = {
       date: S.quoteDate,
       mode: S.regimeKey,
       temp: S.mkt ? S.mkt.temp : null,
-      picks: S.picks.map(function (s) {
-        return { code: s.code, name: s.name, price: s.price, score: s.total, ind: s.ind };
+      /* 三档一起存档：同一天短线/中线/长线各自推荐了谁，后面才能分别验证 */
+      picks: S.allPicks.map(function (s) {
+        return { code: s.code, name: s.name, price: s.price, score: s.total, ind: s.ind, hz: s.hzKey };
       })
     };
     var found = false;
@@ -788,7 +1130,7 @@
      同一天重复刷新只是覆盖，不会堆多条。 */
 
   function pushAdvice() {
-    if (!S.picks || !S.picks.length || !S.quoteDate) return;
+    if (!S.allPicks || !S.allPicks.length || !S.quoteDate) return;
     var cfg = REGIME[S.regimeKey];
     apiPost('/api/advice/daily', {
       date: S.quoteDate,
@@ -797,12 +1139,12 @@
       temp: S.mkt ? S.mkt.temp : null,
       pos_text: cfg.pos,
       note: cfg.note,
-      picks: S.picks.map(function (s) {
+      picks: S.allPicks.map(function (s) {
         return {
           code: s.code, name: s.name, ind: s.ind, price: s.price, score: s.total,
           suggest_low: s.plan.buyLow, suggest_high: s.plan.buyHigh,
           stop: s.plan.stop, t1: s.plan.t1, t2: s.plan.t2,
-          hold: s.plan.hold, pos_pct: s.plan.pos
+          hold: s.plan.hold, pos_pct: s.plan.pos, hz: s.hzKey
         };
       })
     }).then(function (res) {
@@ -841,8 +1183,11 @@
       (today.note ? '<p class="pk-advice-note">' + esc(today.note) + '</p>' : '');
 
     var rows = (today.picks || []).map(function (p, i) {
+      /* 三档上线前的历史存档都没有 hz 字段：那批建议本来就是 1–2 日短线，按短线显示 */
+      var hzKey = HZ[p.hz] ? p.hz : 'S';
       return '<tr>' +
         '<td>' + (i + 1) + '</td>' +
+        '<td>' + (hzKey ? '<span class="pk-hzbadge pk-hzbadge-' + hzKey.toLowerCase() + '">' + HZ[hzKey].short + '</span>' : '—') + '</td>' +
         '<td><b>' + esc(p.name) + '</b><span class="pp-sub">' + esc(p.code) + ' · ' + esc(p.ind || '') + '</span></td>' +
         '<td class="num">' + fx(p.price, 2) + '</td>' +
         '<td class="num"><b>' + fx(p.score, 1) + '</b></td>' +
@@ -855,9 +1200,9 @@
     }).join('');
 
     var tbl = '<div class="tablewrap"><table class="tbl pp-tbl"><thead><tr>' +
-      '<th>#</th><th>标的</th><th class="num">记录价</th><th class="num">综合分</th>' +
+      '<th>#</th><th>周期</th><th>标的</th><th class="num">记录价</th><th class="num">本档分</th>' +
       '<th class="num">建议买入价</th><th class="num">建议止损</th><th class="num">建议止盈</th>' +
-      '<th class="num">仓位</th><th>持有</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+      '<th class="num">仓位</th><th>建议持有</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
 
     var past = '';
     if (list.length > 1) {
@@ -873,428 +1218,47 @@
       '<div class="pp-foot">「建议买入价」为生成建议时现价附近的参考区间（-1.5% ~ +0.5%），非承诺成交价；记录写入本机 SQLite 数据库（ebgap.db）。</div>';
   }
 
-  /* ================= 模拟持仓（虚拟买入） =================
-     每笔按「10 万虚拟本金 × 建议仓位」开仓，按 100 股整数倍成交。
-     纪律与卡片计划一致：现价触及止损自动平仓、达到 T1 自动止盈，也可手动平仓。
-
-     存储：优先写入本机 SQLite（server.py 的 /api/paper/*），
-     localStorage 只留一份快照做离线兜底；服务不可用时退回纯本地模式。
-     首次连接时若库是空的而本地有旧记录，自动把旧记录迁移入库。 */
-  var PKEY = 'ebgap.paper.v1';
-  var MIGRATED_KEY = 'ebgap.paper.migrated.v1';   // 迁移完成标记，避免每次刷新重跑
-  var PAPER_CAPITAL = 100000;
-
-  function localPaperSnapshot() {
-    try {
-      var arr = JSON.parse(localStorage.getItem(PKEY) || '[]');
-      return Array.isArray(arr) ? arr : [];
-    } catch (e) { return []; }
-  }
-
-  function savePaper() {
-    try { localStorage.setItem(PKEY, JSON.stringify(S.paper)); } catch (e) { /* ignore */ }
-  }
-
-  /* 数据库行（snake_case）→ 页面对象（camelCase） */
-  function fromServerTrade(t) {
-    return {
-      id: t.id, code: t.code, name: t.name, ind: t.ind,
-      buyPrice: t.buy_price, buyDate: t.buy_date, buyAt: t.buy_at,
-      shares: t.shares, amt: t.amt,
-      suggestLow: t.suggest_low, suggestHigh: t.suggest_high,
-      stop: t.stop, t1: t.t1, t2: t.t2, hold: t.hold, posPct: t.pos_pct,
-      score: t.score, status: t.status, curPrice: t.cur_price,
-      closePrice: t.close_price, closeDate: t.close_date, closeAt: t.close_at,
-      closeReason: t.close_reason, result: t.result_pct, pnl: t.pnl
-    };
-  }
-
-  function toServerTrade(p) {
-    return {
-      code: p.code, name: p.name, ind: p.ind,
-      buy_price: p.buyPrice, buy_date: p.buyDate, buy_at: p.buyAt,
-      shares: p.shares, amt: p.amt,
-      suggest_low: p.suggestLow, suggest_high: p.suggestHigh,
-      stop: p.stop, t1: p.t1, t2: p.t2, hold: p.hold, pos_pct: p.posPct,
-      score: p.score
-    };
-  }
-
-  function loadPaper() {
-    /* 先用本地快照立即渲染，再向数据库校对 */
-    S.paper = localPaperSnapshot();
-    apiGet('/api/paper/list').then(function (res) {
-      if (!res || !res.ok) { markPaperLoaded(); return; }
-      API_OK = true;
-      var migrated = false;
-      try { migrated = localStorage.getItem(MIGRATED_KEY) === '1'; } catch (e) { /* ignore */ }
-      if (!res.trades.length && S.paper.length && !migrated) {
-        migratePaper(S.paper.slice());   // migratePaper 内部会 markPaperLoaded
-        return;
-      }
-      S.paper = res.trades.map(fromServerTrade);
-      savePaper();
-      renderPaper();
-      renderTop();
-      markPaperLoaded();
-    }).catch(function () {
-      API_OK = false;
-      markPaperLoaded();
-    });
-  }
-
-  /* Bug2：paperEval 必须等持仓从数据库加载完再跑，
-     否则会用尚未 load 的 S.paper（本地旧快照/空数组）去 tick，
-     可能用过期价格覆盖数据库里的现价。 */
-  function markPaperLoaded() {
-    S.paperLoaded = true;
-    if (S.paperEvalPending) {
-      S.paperEvalPending = false;
-      paperEval();
-    }
-  }
-
-  /* 把 localStorage 时代的旧记录逐条迁进数据库（只迁一次）
-     幂等要点：buy 可能返回 duplicate（例如上次 close 超时后重试），
-     此时不能简单跳过——如果库里那条仍是 open，必须补一次 close，
-     否则会留下一条永远平不掉的仓位。只有库里已是 closed 才算迁移完成。 */
-  function migratePaper(local) {
-    var open = local.filter(function (p) { return p.status === 'open'; });
-    var closed = local.filter(function (p) { return p.status === 'closed'; });
-    var chain = Promise.resolve();
-    open.forEach(function (p) {
-      chain = chain.then(function () {
-        return apiPost('/api/paper/buy', toServerTrade(p)).catch(function () { return null; });
-      });
-    });
-    closed.forEach(function (p) {
-      chain = chain.then(function () {
-        return apiPost('/api/paper/buy', toServerTrade(p)).then(function (res) {
-          if (!res || !res.ok || !res.trade) return null;
-          // 服务端幂等命中：库里已存在该 (code, buy_at)。仅当它仍是 open 时才补平仓。
-          if (res.trade.status === 'closed') return null;
-          return apiPost('/api/paper/close', {
-            id: res.trade.id, price: p.closePrice || p.buyPrice,
-            reason: p.closeReason || '历史记录迁移',
-            close_date: p.closeDate, close_at: p.closeAt
-          }).catch(function () { return null; });
-        }).catch(function () { return null; });
-      });
-    });
-    chain.then(function () {
-      return apiGet('/api/paper/list');
-    }).then(function (res) {
-      if (res && res.ok) {
-        S.paper = res.trades.map(fromServerTrade);
-        savePaper();
-        // 只有库里已能读回记录才算迁移成功，写标记防止重复跑
-        try { localStorage.setItem(MIGRATED_KEY, '1'); } catch (e) { /* ignore */ }
-      }
-      renderPaper();
-      renderTop();
-      markPaperLoaded();
-    }).catch(function () {
-      // 迁移链任何一步失败也不能把 paperLoaded 永远卡在 false，
-      // 否则 paperEval 会一直 pending，自动止损/止盈彻底失效。
-      API_OK = false;
-      markPaperLoaded();
-    });
-  }
-
-  function rawPriceOf(code) {
-    if (!S.raw) return 0;
-    for (var i = 0; i < S.raw.length; i++) {
-      if (S.raw[i].code === code) return S.raw[i].price;
-    }
-    return 0;
-  }
-
+  /* ================= 模拟持仓（已抽成独立模块） =================
+     实现在 paper.js（06 虚拟持仓）：数据读写、报价同步、止损止盈纪律、
+     账户统计与 K 线抽屉都在那边。这里只留选股卡片需要的三个入口：
+       · paperOpenOf(code) 卡片判断是否已持仓
+       · paperBuy(pick)    点「虚拟买入」开一笔
+       · paperEval()       全市场行情到手后把持仓票的最新价推给模块
+     两边状态通过 window.EB_PAPER 通信，picker 不再自己存持仓。 */
   function paperOpenOf(code) {
-    for (var i = 0; i < S.paper.length; i++) {
-      if (S.paper[i].status === 'open' && S.paper[i].code === code) return S.paper[i];
-    }
-    return null;
+    return (window.EB_PAPER && window.EB_PAPER.findOpen) ? window.EB_PAPER.findOpen(code) : null;
   }
 
   function paperBuy(s) {
     if (!s || !s.plan || !(s.price > 0)) return;
+    if (!window.EB_PAPER || !window.EB_PAPER.buy) return;
     if (paperOpenOf(s.code)) return;
-    var capital = Math.round(PAPER_CAPITAL * s.plan.pos / 100);
-    var shares = Math.floor(capital / s.price / 100) * 100;
-    if (shares < 100) shares = 100;   // 高价股至少一手
-    var p = {
-      /* Bug5：本地临时 id 用负数空间，与数据库自增正整数 id 隔离。
-         服务端返回真实 id 后会被替换（见下方 res.trade.id）。 */
-      id: -Date.now(), code: s.code, name: s.name, ind: s.ind,
-      buyPrice: s.price, buyDate: S.quoteDate || ymd(bjNow()), buyAt: Date.now(),
-      shares: shares, amt: shares * s.price,
-      suggestLow: s.plan.buyLow, suggestHigh: s.plan.buyHigh,
-      stop: s.plan.stop, t1: s.plan.t1, t2: s.plan.t2, hold: s.plan.hold,
-      posPct: s.plan.pos, score: s.total, status: 'open', curPrice: s.price
-    };
-    if (API_OK !== false) {
-      apiPost('/api/paper/buy', toServerTrade(p)).then(function (res) {
-        if (res && res.ok && res.trade) {
-          API_OK = true;
-          if (!res.duplicate) {
-            p.id = res.trade.id;
-            S.paper.unshift(p);
-          }
-        } else {
-          S.paper.unshift(p);   // 服务端异常也先落本地，不丢用户操作
-        }
-        savePaper();
-        renderPaper();
-        renderTop();
-      }).catch(function () {
-        API_OK = false;
-        S.paper.unshift(p);
-        savePaper();
-        renderPaper();
-        renderTop();
-      });
-    } else {
-      S.paper.unshift(p);
-      savePaper();
-      renderPaper();
-      renderTop();
-    }
+    window.EB_PAPER.buy(s, {
+      hz: s.hzKey,
+      quoteDate: S.quoteDate || ymd(bjNow()),
+      onDone: function () { renderTop(); }
+    });
+    /* 模块里是同步先落本地再发请求，这里立刻重绘卡片，
+       按钮马上变成「已持仓」，不用等服务端返回 */
+    renderTop();
   }
 
-  function finishPaper(p, price, reason) {
-    p.status = 'closed';
-    p.closePrice = price;
-    p.closeDate = S.quoteDate || ymd(bjNow());
-    p.closeAt = Date.now();
-    p.closeReason = reason;
-    p.result = (price / p.buyPrice - 1) * 100;
-    p.pnl = (price - p.buyPrice) * p.shares;
-  }
-
-  function paperClose(id, reason) {
-    var p = null;
-    S.paper.forEach(function (x) { if (x.id === id && x.status === 'open') p = x; });
-    if (!p) return;
-    /* Bug5：负 id 是还没同步完的本地临时记录，服务端不存在，
-       直接平仓会导致「本地已平、数据库仍 open」的再开仓温床。 */
-    if (id < 0 && API_OK !== false) {
-      alert('这笔仓位正在同步到数据库，请稍等 1 秒后再卖出。');
-      return;
-    }
-    // API_OK===false 的离线模式：负 id 是纯本地记录，走本地平仓分支即可
-    /* Bug4：实时价拿不到时，旧代码静默回退到 curPrice/buyPrice，
-       盈亏会用一个过时价算出来且用户毫无察觉。改为明确告知并让用户确认。 */
-    var live = rawPriceOf(p.code);
-    var cur = live;
-    if (!(cur > 0)) {
-      var fallback = (p.curPrice > 0) ? p.curPrice : p.buyPrice;
-      var label = (p.curPrice > 0) ? '上次记录的现价 ' + fx(fallback, 2) : '买入价 ' + fx(fallback, 2);
-      if (!confirm('【' + p.name + '】当前取不到实时行情，无法按最新价卖出。\n\n' +
-                   '可选：按' + label + '平仓（盈亏可能不准确），或取消后稍等行情恢复再卖。\n\n' +
-                   '确定按' + label + '平仓吗？')) return;
-      cur = fallback;
-    }
-    if (API_OK !== false) {
-      apiPost('/api/paper/close', {
-        id: id, price: cur, reason: reason || '手动平仓',
-        close_date: S.quoteDate || ymd(bjNow()), close_at: Date.now()
-      }).then(function (res) {
-        if (res && res.ok && res.trade) {
-          API_OK = true;
-          var t = fromServerTrade(res.trade);
-          var idx = S.paper.findIndex(function (x) { return x.id === id; });
-          if (idx >= 0) S.paper[idx] = t;
-        } else {
-          finishPaper(p, cur, reason || '手动平仓');
-        }
-        savePaper();
-        renderPaper();
-        renderTop();
-      }).catch(function () {
-        API_OK = false;
-        finishPaper(p, cur, reason || '手动平仓');
-        savePaper();
-        renderPaper();
-        renderTop();
-      });
-    } else {
-      finishPaper(p, cur, reason || '手动平仓');
-      savePaper();
-      renderPaper();
-      renderTop();
-    }
-  }
-
-  /* 每次行情更新后核对持仓纪律；数据不是最新的时不动作 */
   function paperEval() {
-    if (!S.paperLoaded) { S.paperEvalPending = true; return; }
-    if (!S.raw || !S.paper || !S.paper.length) return;
-    if (API_OK !== false) {
-      var quotes = {};
-      var has = false;
-      S.paper.forEach(function (p) {
-        if (p.status !== 'open') return;
-        var cur = rawPriceOf(p.code);
-        if (cur > 0) { quotes[p.code] = cur; has = true; }
-      });
-      if (!has) return;
-      apiPost('/api/paper/tick', {
-        quotes: quotes, date: S.quoteDate || ymd(bjNow()), at: Date.now()
-      }).then(function (res) {
-        if (res && res.ok) {
-          API_OK = true;
-          S.paper = res.trades.map(fromServerTrade);
-          savePaper();
-          renderPaper();
-          renderTop();
+    var P = window.EB_PAPER;
+    if (!P || !P.pushPrices || !S.raw) return;
+    var trades = (P.state && P.state.trades) || [];
+    if (!trades.length) return;
+    var map = {}, hit = false;
+    trades.forEach(function (t) {
+      if (t.status !== 'open') return;
+      for (var i = 0; i < S.raw.length; i++) {
+        if (S.raw[i].code === t.code) {
+          if (S.raw[i].price > 0) { map[t.code] = S.raw[i].price; hit = true; }
+          break;
         }
-      }).catch(function () { API_OK = false; paperEvalLocal(); });
-    } else {
-      paperEvalLocal();
-    }
-  }
-
-  /* 离线模式：本地判定止损/止盈（旧逻辑） */
-  function paperEvalLocal() {
-    if (!S.raw || !S.paper || !S.paper.length) return;
-    var changed = false;
-    S.paper.forEach(function (p) {
-      if (p.status !== 'open') return;
-      var cur = rawPriceOf(p.code);
-      if (!(cur > 0)) return;
-      p.curPrice = cur;
-      if (cur <= p.stop) { finishPaper(p, cur, '触发止损'); changed = true; }
-      else if (cur >= p.t1) { finishPaper(p, cur, '达到目标 T1'); changed = true; }
-    });
-    if (changed) savePaper();
-  }
-
-  function ppMoney(v) {
-    var n = Math.round(v);
-    var s = String(Math.abs(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    return (n < 0 ? '-¥' : '¥') + s;
-  }
-
-  function renderPaper() {
-    var box = el('pk-paper');
-    if (!box) return;
-    var open = S.paper.filter(function (p) { return p.status === 'open'; });
-    var closed = S.paper.filter(function (p) { return p.status === 'closed'; });
-
-    var floatPnl = 0, openCnt = 0;
-    open.forEach(function (p) {
-      var cur = rawPriceOf(p.code) || p.curPrice || p.buyPrice;
-      p.curPrice = cur;
-      floatPnl += (cur - p.buyPrice) * p.shares;
-      openCnt++;
-    });
-    var wins = closed.filter(function (p) { return p.result > 0; }).length;
-    var avg = closed.length ? closed.reduce(function (a, p) { return a + p.result; }, 0) / closed.length : 0;
-    var totPnl = closed.reduce(function (a, p) { return a + (p.pnl || 0); }, 0);
-
-    var hint = el('pk-paper-hint');
-    if (hint) {
-      var storeNote = API_OK === false
-        ? (/^(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\])$/.test(location.hostname) ? ' · 数据库未连接，暂存浏览器' : ' · 线上版：记录存在本浏览器')
-        : ' · 已存本机数据库';
-      hint.textContent = openCnt
-        ? '持仓 ' + openCnt + ' 笔 · 浮动 ' + ppMoney(floatPnl) + '（按最新行情）· 触止损自动平仓' + storeNote
-        : '点候选卡片上的「虚拟买入」按建议计划开一笔模拟仓，止损/达标自动平仓' + storeNote;
-    }
-
-    if (!S.paper.length) {
-      box.innerHTML = '<p class="pk-empty">还没有模拟持仓。在上方候选卡片区点「<b>虚拟买入</b>」，系统会按 10 万虚拟本金 × 建议仓位开一笔模拟仓，并按卡片上的止损/目标价自动执行纪律。所有记录写入本机 SQLite 数据库（ebgap.db），换浏览器也不丢。</p>';
-      return;
-    }
-
-    var sumHtml =
-      '<div class="pk-hist-sum">' +
-      '<div><i>持仓中</i><b>' + openCnt + ' 笔</b></div>' +
-      '<div><i>浮动盈亏</i><b class="' + (openCnt ? upCls(floatPnl) : 'pk-flat') + '">' + (openCnt ? ppMoney(floatPnl) : '—') + '</b></div>' +
-      '<div><i>已平仓</i><b>' + closed.length + ' 笔</b></div>' +
-      '<div><i>胜率</i><b>' + (closed.length ? fx(wins / closed.length * 100, 0) + '%' : '—') + '</b></div>' +
-      '<div><i>平均收益</i><b class="' + (closed.length ? upCls(avg) : 'pk-flat') + '">' + (closed.length ? signedPct(avg) : '—') + '</b></div>' +
-      '<div><i>累计盈亏</i><b class="' + (closed.length ? upCls(totPnl) : 'pk-flat') + '">' + (closed.length ? ppMoney(totPnl) : '—') + '</b></div>' +
-      '</div>';
-
-    var openHtml = '';
-    if (open.length) {
-      openHtml = '<div class="tablewrap"><table class="tbl pp-tbl"><thead><tr>' +
-        '<th>标的</th><th>买入</th><th class="num">现价</th><th class="num">盈亏</th>' +
-        '<th class="num">建议买区</th><th class="num">止损 / 目标</th><th>计划</th><th></th></tr></thead><tbody>' +
-        open.map(function (p) {
-          var ret = (p.curPrice / p.buyPrice - 1) * 100;
-          var pnl = (p.curPrice - p.buyPrice) * p.shares;
-          var near = p.curPrice <= p.stop * 1.02;
-          var suggest = (p.suggestLow > 0 && p.suggestHigh > 0)
-            ? fx(p.suggestLow, 2) + '–' + fx(p.suggestHigh, 2)
-            : '—';
-          return '<tr>' +
-            '<td><b>' + esc(p.name) + '</b><span class="pp-sub">' + p.code + '</span></td>' +
-            '<td>' + fx(p.buyPrice, 2) + '<span class="pp-sub">' + p.buyDate + '</span></td>' +
-            '<td class="num">' + fx(p.curPrice, 2) + '</td>' +
-            '<td class="num"><b class="' + upCls(ret) + '">' + signedPct(ret) + '</b><span class="pp-sub">' + ppMoney(pnl) + '</span></td>' +
-            '<td class="num">' + suggest + '</td>' +
-            '<td class="num">' + fx(p.stop, 2) + ' <span class="pk-down">/</span> ' + fx(p.t1, 2) + '</td>' +
-            '<td>' + (near ? '<span class="pp-warn">接近止损</span> · ' : '') + esc(p.hold || '') + '</td>' +
-            '<td><button class="pk-mini pp-sell" data-id="' + p.id + '">卖出</button></td>' +
-            '</tr>';
-        }).join('') + '</tbody></table></div>';
-    }
-
-    var closedHtml = '';
-    if (closed.length) {
-      closedHtml = '<div class="pp-closed-h">已平仓</div>' + closed.map(function (p) {
-        var cls = p.closeReason === '触发止损' ? 'pp-r-stop' : (p.closeReason.indexOf('目标') >= 0 ? 'pp-r-win' : 'pp-r-man');
-        return '<div class="pp-closed">' +
-          '<b>' + esc(p.name) + '</b>' +
-          '<span class="pp-sub">' + p.buyDate + ' → ' + p.closeDate + '</span>' +
-          '<span class="pp-reason ' + cls + '">' + esc(p.closeReason) + '</span>' +
-          '<b class="' + upCls(p.result) + '">' + signedPct(p.result) + '</b>' +
-          '<span class="pp-sub">' + ppMoney(p.pnl || 0) + '</span>' +
-          '</div>';
-      }).join('');
-    }
-
-    box.innerHTML = sumHtml + openHtml + closedHtml +
-      '<div class="pp-foot">每笔虚拟本金 = 10 万 × 建议仓位，按 100 股整数倍成交；未计手续费与滑点。' +
-      '记录写入本机 SQLite 数据库（ebgap.db）。' +
-      '<button class="pk-mini" id="pk-paper-clear">清空记录</button></div>';
-
-    box.querySelectorAll('.pp-sell').forEach(function (b) {
-      b.addEventListener('click', function () { paperClose(+b.dataset.id, '手动平仓'); });
-    });
-    var clr = box.querySelector('#pk-paper-clear');
-    if (clr) clr.addEventListener('click', function () {
-      if (!confirm('确定清空全部模拟持仓与历史记录？数据库中的记录会一并删除，此操作不可恢复。')) return;
-      /* Bug3：先删数据库、成功了再清本地。
-         旧实现先清本地再异步删库，POST 失败被静默吞掉，
-         用户以为清干净了，刷新后记录全部复活。 */
-      function applyLocal() {
-        S.paper = [];
-        savePaper();
-        renderPaper();
-        renderTop();
       }
-      if (API_OK === false) { applyLocal(); return; }   // 离线模式：只有本地
-      var btn = this;
-      btn.disabled = true;
-      btn.textContent = '清空中…';
-      apiPost('/api/paper/clear', {}).then(function (res) {
-        btn.disabled = false;
-        btn.textContent = '清空记录';
-        if (!res || !res.ok) {
-          alert('清空失败：数据库未确认删除，本地记录已保留。请检查本地服务后重试。');
-          return;
-        }
-        applyLocal();
-      }).catch(function () {
-        btn.disabled = false;
-        btn.textContent = '清空记录';
-        API_OK = false;
-        alert('清空失败：无法连接本地数据库，本地记录已保留（未误删）。');
-      });
     });
+    if (hit) P.pushPrices(map);
   }
 
   /* ================= 渲染 ================= */
@@ -1351,37 +1315,109 @@
       '<div class="pk-idx"><i>两市成交</i><b>' + fAmt(m.amt) + '</b><em class="pk-flat">' + (m.prevAmt ? '前日 ' + fAmt(m.prevAmt) : '无对比') + '</em></div>' +
       '</div></div>' +
       '<div class="pk-state-note"><b>今日策略：' + cfg.label + '</b>（' + cfg.temp + '）—— ' + cfg.note +
-      '<span>建议仓位：' + cfg.pos + '　·　今日候选 ' + S.topN + ' 只　·　数据时间 ' +
-      (S.quoteDate || '') + ' ' + (S.at ? hhmm(S.at) : '') + '　·　全市场 ' + (S.raw ? S.raw.length : 0) + ' 只，过滤后进入评分 ' +
-      (S.scored ? S.scored.length : 0) + ' 只</span></div>';
+      '<span>建议仓位：' + cfg.pos + '　·　三档候选：短 ' + S.hzPicks.S.length + ' / 中 ' + S.hzPicks.M.length +
+      ' / 长 ' + S.hzPicks.L.length + ' 只　·　数据时间 ' +
+      (S.quoteDate || '') + ' ' + (S.at ? hhmm(S.at) : '') + '　·　全市场 ' + (S.raw ? S.raw.length : 0) +
+      ' 只，通过任一档门槛 ' + (S.universe ? S.universe.length : 0) + ' 只</span></div>';
   }
 
   function prevPickMap() {
     var today = S.quoteDate || '';
     var map = {};
+    /* 「连续」要按同档口径算：一只股昨天在短线榜、今天进长线榜，不该算连续 */
     (S.hist || []).forEach(function (h) {
       if (h.date >= today) return;
-      h.picks.forEach(function (p) { if (!map[p.code]) map[p.code] = h.date; });
+      (h.picks || []).forEach(function (p) {
+        if ((p.hz || 'S') !== S.hz) return;
+        if (!map[p.code]) map[p.code] = h.date;
+      });
     });
     return map;
+  }
+
+  /* 三档总览：一屏看清每档推荐了谁、平均多少分、按什么纪律做 */
+  function renderHzGrid() {
+    var box = el('pk-hz-grid');
+    if (!box) return;
+    var warn = S.fundamentals === false
+      ? '<div class="pk-hz-warn"><b>数据源降级</b>当前为腾讯源，没有 ROE / PB / 上市日期，' +
+        '中线与长线档的财务门槛已自动关闭，名单只按量价与规模筛出，请自行补看基本面。</div>'
+      : '';
+    box.innerHTML = warn + HZ_ORDER.map(function (k) {
+      var hz = HZ[k], list = S.hzPicks[k] || [];
+      var avg = list.length ? list.reduce(function (a, b) { return a + b.total; }, 0) / list.length : null;
+      var top = list.slice(0, 3).map(function (s, i) {
+        return '<li><i>' + (i + 1) + '</i><b>' + esc(s.name) + '</b><em class="mono">' + s.code + '</em>' +
+          '<span>' + fx(s.total, 1) + '</span></li>';
+      }).join('');
+      return '<div class="pk-hz pk-hz-' + k.toLowerCase() + (S.hz === k ? ' on' : '') + '">' +
+        '<div class="pk-hz-h"><b>' + hz.label + '档</b><em>' + hz.window + '</em></div>' +
+        '<p class="pk-hz-desc">' + hz.desc + '</p>' +
+        '<div class="pk-hz-meta"><span>候选 <b>' + list.length + '</b> 只</span>' +
+        '<span>均分 <b>' + (avg === null ? '—' : fx(avg, 1)) + '</b></span></div>' +
+        '<ul class="pk-hz-list">' + (top || '<li class="pk-hz-none">本档暂无标的通过门槛</li>') + '</ul>' +
+        '<div class="pk-hz-foot"><span>' + hz.discipline + '</span>' +
+        '<button class="pk-mini" data-hz-go="' + k + '">查看名单 →</button></div>' +
+        '</div>';
+    }).join('');
+    box.querySelectorAll('[data-hz-go]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        setHorizon(b.dataset.hzGo);
+        var t = el('pk-top');
+        if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  }
+
+  function renderHzTabs() {
+    var box = el('pk-hz-tabs');
+    if (!box) return;
+    box.innerHTML = HZ_ORDER.map(function (k) {
+      var n = (S.hzPicks[k] || []).length;
+      return '<button class="pk-hztab pk-hztab-' + k.toLowerCase() + (S.hz === k ? ' on' : '') + '" data-hz="' + k + '">' +
+        '<b>' + HZ[k].label + '</b><em>' + HZ[k].shortWin + '</em><span>' + n + ' 只</span></button>';
+    }).join('');
+    box.querySelectorAll('.pk-hztab').forEach(function (b) {
+      b.addEventListener('click', function () { setHorizon(b.dataset.hz); });
+    });
+  }
+
+  function setHorizon(k) {
+    if (!HZ[k] || S.hz === k) return;
+    S.hz = k;
+    try { localStorage.setItem('ebgap.pick.hz.v1', k); } catch (e) { /* ignore */ }
+    /* 换档等于换一套选股逻辑：重算分数、名单、计划，并让 AI 复核按新口径重来 */
+    compute();
+    render();
+    if (window.EB_AI && typeof window.EB_AI.check === 'function') window.EB_AI.check();
   }
 
   function renderTop() {
     var box = el('pk-top');
     if (!box) return;
-    if (!S.picks || !S.picks.length) {
-      var why = S.loading ? '正在计算…' : (S.filters.minScore > 0 && S.scored && S.scored.length
-        ? '当前没有标的达到你设定的最低综合分 ' + S.filters.minScore + '——可以放宽门槛，或把这当作「今天不适合做短线」的信号。'
-        : '当前没有标的通过全部硬性过滤条件——这本身是「今天不适合做短线」的信号，空仓等待也是一种策略。');
+    var k = S.hz, hz = HZ[k];
+    var picks = S.hzPicks[k] || [];
+
+    var title = el('pk-top-title');
+    if (title) title.textContent = '今日候选 · ' + hz.label + ' · 建议持有 ' + hz.window;
+    renderHzTabs();
+
+    if (!picks.length) {
+      var why = S.loading ? '正在计算…'
+        : (S.filters.minScore > 0
+          ? '「' + hz.label + '」档没有标的达到你设定的最低综合分 ' + S.filters.minScore + '——可以放宽门槛，或把这当作「这一档今天不适合出手」的信号。'
+          : '「' + hz.label + '」档没有标的通过本档硬性门槛——空仓等待也是一种策略，切到其它档看看。');
       box.innerHTML = '<div class="pk-empty">' + why + '</div>';
       return;
     }
-    var cfg = REGIME[S.regimeKey];
+
     var prevMap = prevPickMap();
     var repeat = 0;
     var heldMap = {};
-    (S.paper || []).forEach(function (p) { if (p.status === 'open') heldMap[p.code] = 1; });
-    box.innerHTML = S.picks.map(function (s, i) {
+    var PT = (window.EB_PAPER && window.EB_PAPER.state && window.EB_PAPER.state.trades) || [];
+    PT.forEach(function (p) { if (p.status === 'open') heldMap[p.code] = 1; });
+
+    box.innerHTML = picks.map(function (s, i) {
       var again = prevMap[s.code];
       if (again) repeat++;
       var dims = DIM.map(function (d) {
@@ -1391,13 +1427,14 @@
           '<div class="pk-dim-bar"><b style="width:' + v + '%"></b></div>' +
           '<em>' + v + '</em></div>';
       }).join('');
-      return '<div class="pk-card">' +
+      return '<div class="pk-card pk-card-' + k.toLowerCase() + '">' +
         '<div class="pk-card-h">' +
         '<span class="pk-rank">' + (i + 1 < 10 ? '0' : '') + (i + 1) + '</span>' +
         '<div class="pk-name"><b>' + esc(s.name) +
         (again ? '<span class="pk-again" title="上次上榜 ' + again + '">连续</span>' : '<span class="pk-new">新进</span>') +
         '</b><em>' + s.code + ' · ' + esc(s.ind) + '</em></div>' +
-        '<div class="pk-score"><b>' + fx(s.total, 1) + '</b><i>综合分</i></div>' +
+        '<span class="pk-hz-chip pk-hz-chip-' + k.toLowerCase() + '">' + hz.label + '</span>' +
+        '<div class="pk-score"><b>' + fx(s.total, 1) + '</b><i>本档分</i></div>' +
         '</div>' +
         '<div class="pk-quote">' +
         '<b>' + fx(s.price, 2) + '</b><em class="' + upCls(s.pct) + '">' + signedPct(s.pct) + '</em>' +
@@ -1414,9 +1451,11 @@
         '<div><i>参考买区</i><b>' + fx(s.plan.buyLow, 2) + '–' + fx(s.plan.buyHigh, 2) + '</b></div>' +
         '<div><i>止损</i><b class="pk-down">' + fx(s.plan.stop, 2) + '</b></div>' +
         '<div><i>目标</i><b class="pk-up">' + fx(s.plan.t1, 2) + ' / ' + fx(s.plan.t2, 2) + '</b></div>' +
-        '<div><i>持有</i><b>' + s.plan.hold + '</b></div>' +
+        '<div><i>建议持有</i><b>' + s.plan.hold + '</b></div>' +
         '<div><i>建议仓位</i><b>' + s.plan.pos + '%</b></div>' +
         '</div>' +
+        '<div class="pk-hold-basis"><i>持有依据</i><span>' + esc(s.plan.holdBasis) + '</span>' +
+        '<em>' + esc(s.plan.holdNote) + '</em></div>' +
         '<div class="pk-risk">风险 · ' + s.risks.join('　·　') + '</div>' +
         '<div class="pk-card-foot">' +
         (heldMap[s.code]
@@ -1440,8 +1479,8 @@
     });
     var hint = el('pk-top-hint');
     if (hint) {
-      hint.textContent = '今日 ' + S.picks.length + ' 只：新进 ' + (S.picks.length - repeat) + ' 只、延续 ' + repeat +
-        ' 只 · 评分基准 ' + (S.quoteDate || '');
+      hint.textContent = hz.label + '档 ' + picks.length + ' 只：新进 ' + (picks.length - repeat) + ' 只、延续 ' + repeat +
+        ' 只 · 按「' + hz.window + '」口径评分 · 基准 ' + (S.quoteDate || '');
     }
   }
 
@@ -1459,7 +1498,7 @@
   function renderTuner() {
     var box = el('pk-tuner');
     if (!box) return;
-    var w = S.weights || W_BASE;
+    var k = S.hz, w = S.hzW[k] || HZ[k].w;
     var sliders = DIM.map(function (d) {
       return '<div class="pk-tune-row">' +
         '<label>' + d.name + '<em>' + d.desc + '</em></label>' +
@@ -1477,15 +1516,24 @@
 
     box.innerHTML =
       '<div class="pk-tune-modes">' +
-      ['auto', 'offense', 'neutral', 'defense'].map(function (k) {
-        var lab = k === 'auto' ? '自动跟随行情' : REGIME[k].label;
-        return '<button class="pk-seg' + (S.mode === k ? ' on' : '') + '" data-mode="' + k + '">' + lab + '</button>';
+      '<span class="pk-tune-lab">权重档位</span>' +
+      HZ_ORDER.map(function (h) {
+        return '<button class="pk-seg pk-seg-hz' + (S.hz === h ? ' on' : '') + '" data-hz="' + h + '">' +
+          HZ[h].label + '</button>';
       }).join('') +
-      '<span class="pk-tune-hint">切换模式会同时改变权重、候选数量与仓位纪律；手动改动权重后按你的参数计算</span>' +
+      '<span class="pk-tune-hint">三档各自一套权重，互不影响；估值分（短 0% / 中 16% / 长 38%）固定计入，不占滑块</span>' +
+      '</div>' +
+      '<div class="pk-tune-modes pk-tune-regime">' +
+      '<span class="pk-tune-lab">仓位模式</span>' +
+      ['auto', 'offense', 'neutral', 'defense'].map(function (m) {
+        var lab = m === 'auto' ? '自动跟随行情' : REGIME[m].label;
+        return '<button class="pk-seg' + (S.mode === m ? ' on' : '') + '" data-mode="' + m + '">' + lab + '</button>';
+      }).join('') +
+      '<span class="pk-tune-hint">只影响仓位系数与短线档候选数量，不再覆盖三档权重</span>' +
       '</div>' +
       '<div class="pk-tune-grid">' + sliders + '</div>' +
       '<div class="pk-tune-foot">' +
-      '<label>候选数量 <input type="number" id="pk-topn" min="1" max="12" value="' + S.topN + '"></label>' +
+      '<label>' + HZ[k].label + '档候选数 <input type="number" id="pk-topn" min="1" max="12" value="' + topNOf(k) + '"></label>' +
       '<label>最低综合分 <input type="number" id="pk-minscore" min="0" max="100" value="' + S.filters.minScore + '"></label>' +
       '<label>行业 <select id="pk-ind">' + indOpts.join('') + '</select></label>' +
       '<label>搜索 <input type="text" id="pk-q" placeholder="代码/名称" value="' + esc(S.filters.q) + '" style="width:96px"></label>' +
@@ -1493,25 +1541,30 @@
       '<button class="pk-btn" id="pk-reset">恢复默认</button>' +
       '</div>';
 
-    box.querySelectorAll('.pk-seg').forEach(function (b) {
+    box.querySelectorAll('.pk-seg[data-hz]').forEach(function (b) {
+      b.addEventListener('click', function () { setHorizon(b.dataset.hz); });
+    });
+    box.querySelectorAll('.pk-seg[data-mode]').forEach(function (b) {
       b.addEventListener('click', function () {
         S.mode = b.dataset.mode;
-        S.weightsTouched = false;
-        S.topNTouched = false;
         compute(); render();
       });
     });
     box.querySelectorAll('input[type=range]').forEach(function (r) {
       r.addEventListener('input', function () {
-        S.weights[r.dataset.w] = +r.value;
-        S.weightsTouched = true;
+        S.hzW[k][r.dataset.w] = +r.value;
+        S.hzTouched[k] = true;
         var lab = box.querySelector('[data-wv="' + r.dataset.w + '"]');
         if (lab) lab.textContent = r.value + '%';
         debounceCompute();
       });
     });
     var topn = el('pk-topn');
-    if (topn) topn.addEventListener('change', function () { S.topN = clamp(+topn.value || 5, 1, 12); S.topNTouched = true; compute(); render(); });
+    if (topn) topn.addEventListener('change', function () {
+      S.hzTopN[k] = clamp(+topn.value || HZ[k].topN, 1, 12);
+      S.hzTouched[k] = true;
+      compute(); render();
+    });
     var ms = el('pk-minscore');
     if (ms) ms.addEventListener('change', function () { S.filters.minScore = clamp(+ms.value || 0, 0, 100); compute(); render(); });
     var ind = el('pk-ind');
@@ -1522,9 +1575,14 @@
     if (q) q.addEventListener('input', function () { S.filters.q = q.value.trim(); renderPool(); });
     var rst = el('pk-reset');
     if (rst) rst.addEventListener('click', function () {
-      S.mode = 'auto'; S.weightsTouched = false; S.topNTouched = false;
+      S.mode = 'auto';
+      S.hz = 'S';
+      HZ_ORDER.forEach(function (h) {
+        S.hzW[h] = { d1: HZ[h].w.d1, d2: HZ[h].w.d2, d3: HZ[h].w.d3, d4: HZ[h].w.d4, d5: HZ[h].w.d5, d6: HZ[h].w.d6 };
+        S.hzTopN[h] = HZ[h].topN;
+        S.hzTouched[h] = false;
+      });
       S.filters = { ind: 'all', minScore: 0, inflow: false, q: S.filters.q };
-      S.weights = null; S.topN = null;
       compute(); render();
     });
   }
@@ -1533,7 +1591,7 @@
   function debounceCompute() {
     clearTimeout(computeTimer);
     computeTimer = setTimeout(function () {
-      compute(); renderTop(); renderPaper(); renderPool();
+      compute(); renderTop(); renderPool(); renderHzGrid(); renderHzTabs();
       if (window.EB_AI && typeof window.EB_AI.check === 'function') window.EB_AI.check();
     }, 120);
   }
@@ -1544,6 +1602,12 @@
     var m = S.mkt || {};
     return {
       quoteDate: S.quoteDate,
+      horizon: {
+        key: S.hz,
+        label: HZ[S.hz].label,
+        window: HZ[S.hz].window,
+        hold: S.hzPicks[S.hz].length ? S.hzPicks[S.hz][0].plan.hold : HZ[S.hz].window
+      },
       mkt: {
         regime: S.regimeKey,
         regime_label: (REGIME[S.regimeKey] || {}).label || '',
@@ -1553,10 +1617,12 @@
       picks: S.scored.slice(0, limit || 20).map(function (s) {
         return {
           code: s.code, name: s.name, ind: s.ind, price: s.price, pct: s.pct,
-          total: s.total, d1: s.scores.d1, d2: s.scores.d2, d3: s.scores.d3,
+          total: s.hs[S.hz], value: s.value,
+          d1: s.scores.d1, d2: s.scores.d2, d3: s.scores.d3,
           d4: s.scores.d4, d5: s.scores.d5, d6: s.scores.d6,
           net: s.net, netRatio: s.netRatio, turn: s.turn, volRatio: s.volRatio,
-          amt: s.amt, cap: s.cap, d60: s.d60, ytd: s.ytd, pe: s.pe, roe: s.roe, npYoY: s.npYoY
+          amt: s.amt, cap: s.cap, d60: s.d60, ytd: s.ytd, pe: s.pe, pb: s.pb,
+          roe: s.roe, npYoY: s.npYoY, hz: S.hz
         };
       })
     };
@@ -1576,6 +1642,9 @@
 
   function poolVal(s, k) {
     if (k === 'rank') return s.rankAll || 999999;
+    if (k === 'total') return s.hs[S.hz] || 0;
+    if (k === 'value') return s.value;
+    if (k === 'hz') { var b = bestHzOf(s); return b ? HZ[b].label : ''; }
     if (/^d[1-6]$/.test(k)) return s.scores[k];
     return s[k];
   }
@@ -1586,7 +1655,7 @@
     if (!S.scored) return [];
     var f = S.filters;
     var rows = S.scored.filter(function (s) {
-      if (s.total < f.minScore) return false;
+      if (s.hs[S.hz] < f.minScore) return false;
       if (f.ind !== 'all' && s.ind !== f.ind) return false;
       if (f.inflow && s.net <= 0) return false;
       if (f.q && (s.code.indexOf(f.q) < 0 && s.name.indexOf(f.q) < 0)) return false;
@@ -1613,11 +1682,11 @@
     (S.picks || []).forEach(function (p) { topCodes[p.code] = 1; });
     var hint = el('pk-pool-hint');
     if (hint) {
-      hint.textContent = (S.scored ? S.scored.length + ' 只通过硬性过滤 · 当前筛选后 ' + rows.length + ' 只'
+      hint.textContent = (S.scored ? HZ[S.hz].label + '档 · ' + S.scored.length + ' 只通过本档门槛 · 当前筛选后 ' + rows.length + ' 只'
         : '等待数据') + (S.dropped ? ' · 剔除：' + Object.keys(S.dropped).map(function (k) { return k + ' ' + S.dropped[k]; }).join('、') : '');
     }
     if (!rows.length) {
-      tbl.innerHTML = '<tbody><tr><td style="padding:20px;color:#8b929c">没有符合条件的标的，试着放宽最低综合分或行业筛选。</td></tr></tbody>';
+      tbl.innerHTML = '<tbody><tr><td style="padding:20px;color:#8b929c">「' + HZ[S.hz].label + '」档没有符合条件的标的，试着切档、放宽最低综合分或行业筛选。</td></tr></tbody>';
       return;
     }
     var shown = rows.slice(0, POOL_LIMIT);
@@ -1628,18 +1697,20 @@
       { k: 'ind', t: '行业' },
       { k: 'price', t: '现价', num: true },
       { k: 'pct', t: '涨跌', num: true },
-      { k: 'total', t: '综合', num: true },
+      { k: 'total', t: HZ[S.hz].label + '分', num: true },
       { k: 'd1', t: '资金', num: true },
       { k: 'd2', t: '量价', num: true },
       { k: 'd3', t: '位置', num: true },
       { k: 'd4', t: '行业', num: true },
       { k: 'd5', t: '流动', num: true },
       { k: 'd6', t: '质量', num: true },
+      { k: 'value', t: '估值', num: true },
       { k: 'net', t: '主力净额', num: true },
       { k: 'turn', t: '换手', num: true },
       { k: 'volRatio', t: '量比', num: true },
       { k: 'd60', t: '60日', num: true },
-      { k: 'pe', t: 'PE', num: true }
+      { k: 'pe', t: 'PE', num: true },
+      { k: 'hz', t: '适用' }
     ];
     var head = '<thead><tr>' + cols.map(function (c) {
       var on = S.sort.k === c.k ? ' class="pk-th-on"' : '';
@@ -1651,6 +1722,7 @@
         if (k === 'd1' || k === 'd2' || k === 'd3' || k === 'd4' || k === 'd5' || k === 'd6') return s.scores[k];
         return s[k];
       };
+      var href = bestHzOf(s);
       return '<tr class="' + (topCodes[s.code] ? 'pk-tr-top' : '') + '">' +
         '<td class="num">' + (s.rankAll || (i + 1)) + '</td>' +
         '<td class="mono">' + s.code + '</td>' +
@@ -1658,15 +1730,17 @@
         '<td>' + esc(s.ind) + '</td>' +
         '<td class="num">' + fx(s.price, 2) + '</td>' +
         '<td class="num ' + upCls(s.pct) + '">' + signedPct(s.pct) + '</td>' +
-        '<td class="num"><b>' + fx(s.total, 1) + '</b></td>' +
+        '<td class="num"><b>' + fx(s.hs[S.hz], 1) + '</b></td>' +
         ['d1', 'd2', 'd3', 'd4', 'd5', 'd6'].map(function (k) {
           return '<td class="num pk-cell">' + s.scores[k] + '<i style="width:' + s.scores[k] + '%"></i></td>';
         }).join('') +
+        '<td class="num pk-cell">' + s.value + '<i style="width:' + s.value + '%"></i></td>' +
         '<td class="num ' + (s.net >= 0 ? 'pk-up' : 'pk-down') + '">' + (s.net >= 0 ? '+' : '') + fx(s.net / 1e8, 2) + ' 亿</td>' +
         '<td class="num">' + fx(s.turn, 1) + '%</td>' +
         '<td class="num">' + fx(s.volRatio, 2) + '</td>' +
         '<td class="num ' + upCls(s.d60) + '">' + signedPct(s.d60, 1) + '</td>' +
         '<td class="num">' + (s.pe > 0 ? fx(s.pe, 1) : '亏损') + '</td>' +
+        '<td>' + (href ? '<span class="pk-hzbadge pk-hzbadge-' + href.toLowerCase() + '" title="该股在三档里的相对强项">' + HZ[href].short + '</span>' : '—') + '</td>' +
         '<td><button class="pk-mini pk-go" data-code="' + s.code + '">分析</button></td>' +
         '</tr>';
     }).join('');
@@ -1695,19 +1769,30 @@
     var now = {};
     (S.raw || []).forEach(function (r) { now[r.code] = r.price; });
 
-    var totalPicks = 0, totalRet = 0, wins = 0, counted = 0;
+    var hf = S.histHz || 'S';
+    var totalPicks = 0, totalRet = 0, wins = 0, counted = 0, dayCount = 0;
     /* 当天名单还没有「后续表现」可比：用当前价算它自己的收益永远≈0，
        会稀释平均收益、把胜率拉向中性。统计只计已过交易日的记录。 */
     var todayQ = S.quoteDate || ymd(bjNow());
     var daysHtml = S.hist.map(function (h) {
+      var all = h.picks || [];
+      var dayCounts = { S: 0, M: 0, L: 0 };
+      all.forEach(function (p) { dayCounts[p.hz || 'S']++; });
+      var list = all.filter(function (p) { return hf === 'all' || (p.hz || 'S') === hf; });
+      if (!list.length) return '';
+      dayCount++;
+
       var rets = [];
       var isToday = h.date >= todayQ;
-      var items = h.picks.map(function (p) {
+      var items = list.map(function (p) {
         totalPicks++;
         var cur = isToday ? null : now[p.code];
         var ret = (cur > 0 && p.price > 0) ? (cur / p.price - 1) * 100 : null;
         if (ret !== null) { rets.push(ret); totalRet += ret; if (ret > 0) wins++; counted++; }
-        return '<span class="pk-hchip" data-code="' + p.code + '">' + esc(p.name) +
+        var pk = p.hz || 'S';
+        return '<span class="pk-hchip" data-code="' + p.code + '">' +
+          '<i class="pk-hchip-hz pk-hzbadge-' + pk.toLowerCase() + '">' + HZ[pk].short + '</i>' +
+          esc(p.name) +
           '<em class="' + (ret === null ? 'pk-flat' : upCls(ret)) + '">' +
           (ret === null ? (isToday ? '当日' : '—') : signedPct(ret)) + '</em></span>';
       }).join('');
@@ -1716,25 +1801,38 @@
       return '<div class="pk-hist-day">' +
         '<div class="pk-hist-h"><b>' + h.date + '</b>' +
         '<span class="pk-badge pk-b-' + cfg.cls + '">' + cfg.label + '</span>' +
-        '<em>' + (h.temp !== null ? '温度 ' + h.temp : '') + ' · ' + h.picks.length + ' 只</em>' +
+        '<em>' + (h.temp !== null ? '温度 ' + h.temp + ' · ' : '') +
+        '短 ' + dayCounts.S + ' / 中 ' + dayCounts.M + ' / 长 ' + dayCounts.L + '</em>' +
         '<b class="pk-hist-avg ' + (avg === null ? 'pk-flat' : upCls(avg)) + '">' +
         (avg === null ? (isToday ? '当日待验证' : '—') : '均值 ' + signedPct(avg)) + '</b></div>' +
         '<div class="pk-hist-list">' + items + '</div></div>';
     }).join('');
 
+    var filterHtml = '<div class="pk-hist-filter">' +
+      '<span>统计口径</span>' +
+      ['S', 'M', 'L', 'all'].map(function (k) {
+        var lab = k === 'all' ? '全部' : HZ[k].label;
+        return '<button class="pk-hist-fbtn' + (hf === k ? ' on' : '') + '" data-hf="' + k + '">' + lab + '</button>';
+      }).join('') +
+      '<em>' + (hf === 'all' ? '三档混在一起看，只作粗略参考' : HZ[hf].label + '档 · 建议持有 ' + HZ[hf].window) + '</em>' +
+      '</div>';
+
     var avgAll = counted ? totalRet / counted : 0;
     var winRate = counted ? wins / counted * 100 : 0;
-    box.innerHTML =
+    box.innerHTML = filterHtml +
       '<div class="pk-hist-sum">' +
       '<div><i>累计推荐</i><b>' + totalPicks + ' 只</b></div>' +
       '<div><i>已可验证</i><b>' + counted + ' 只</b></div>' +
       '<div><i>至今平均</i><b class="' + (counted ? upCls(avgAll) : 'pk-flat') + '">' + (counted ? signedPct(avgAll) : '—') + '</b></div>' +
       '<div><i>上涨比例</i><b>' + (counted ? fx(winRate, 0) + '%' : '—') + '</b></div>' +
-      '<div><i>记录天数</i><b>' + S.hist.length + ' 天</b></div>' +
+      '<div><i>记录天数</i><b>' + dayCount + ' 天</b></div>' +
       '</div>' +
-      '<p class="pk-hist-note">收益 =（最新价 − 当日记录价）/ 当日记录价，按你打开本页时的行情计算，未计手续费与滑点，也不代表实盘可实现。当天名单标「当日」、暂不计入统计，要等下一个交易日才有可比表现。记录只存在本机浏览器。</p>' +
-      daysHtml;
+      '<p class="pk-hist-note">收益 =（最新价 − 当日记录价）/ 当日记录价，按你打开本页时的行情计算，未计手续费与滑点，也不代表实盘可实现。当天名单标「当日」、暂不计入统计。短线档看次日表现就有意义，中长线档需要更长验证期——不要用几天的涨跌去否定一个 3 个月的判断。</p>' +
+      (daysHtml || '<p class="pk-empty">该档还没有历史记录，切回其它档看看。</p>');
 
+    box.querySelectorAll('.pk-hist-fbtn').forEach(function (b) {
+      b.addEventListener('click', function () { S.histHz = b.dataset.hf; renderHist(); });
+    });
     box.querySelectorAll('.pk-hchip').forEach(function (c) {
       c.addEventListener('click', function () { gotoStock(c.dataset.code); });
     });
@@ -1748,14 +1846,11 @@
 
   function render() {
     if (!el('v-pick')) return;
-    if (!S.weights) S.weights = W_BASE;
-    if (!S.topN) S.topN = 5;
     loadHist();
-    loadPaper();
     loadAdvice();
     renderState();
+    renderHzGrid();
     renderTop();
-    renderPaper();
     renderAdvice();
     renderTuner();
     renderPool();
@@ -1807,7 +1902,9 @@
     state: S,
     payload: payloadForAI,
     setAI: setAI,
+    setHorizon: setHorizon,   /* 供外部切换周期档：'S' | 'M' | 'L' */
+    horizons: HZ,
     frac: tradedFraction,   /* 供自测/排查：传入 Date 可查任意时点的累计成交占比 */
-    paper: { buy: paperBuy, close: paperClose, eval: paperEval }   /* 模拟持仓接口，也可供外部调试 */
+    paper: { buy: paperBuy, eval: paperEval, open: paperOpenOf }   /* 模拟持仓已抽到 paper.js，这里只留选股侧入口 */
   };
 })();

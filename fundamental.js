@@ -24,28 +24,20 @@
 
   var SEQ = 0;
   function jsonp(url, timeout) {
-    return new Promise(function (resolve, reject) {
-      var name = 'EBF_' + Date.now() + '_' + (++SEQ);
-      var el = document.createElement('script');
-      var done = false;
-      function cleanup() {
-        if (el.parentNode) el.parentNode.removeChild(el);
-        try { delete window[name]; } catch (e) { window[name] = undefined; }
-      }
-      var timer = setTimeout(function () {
-        if (done) return;
-        done = true; cleanup(); reject(new Error('timeout'));
-      }, timeout || 10000);
-      window[name] = function (data) {
-        if (done) return;
-        done = true; clearTimeout(timer); cleanup(); resolve(data);
-      };
-      el.onerror = function () {
-        if (done) return;
-        done = true; clearTimeout(timer); cleanup(); reject(new Error('network'));
-      };
-      el.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + name;
-      document.head.appendChild(el);
+    // 统一走本机代理 /api/stock/em（原因见 stock.js 同名注释）
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, timeout || 12000);
+    return fetch('/api/stock/em?u=' + encodeURIComponent(url), {
+      headers: { Accept: 'application/json' }, signal: ctl.signal
+    }).then(function (r) {
+      clearTimeout(timer);
+      return r.json().then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || 'upstream HTTP ' + r.status);
+        return j;
+      });
+    }, function (e) {
+      clearTimeout(timer);
+      throw new Error(e && e.name === 'AbortError' ? 'timeout' : 'network');
     });
   }
 

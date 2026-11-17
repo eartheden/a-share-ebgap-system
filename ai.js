@@ -79,7 +79,8 @@
   }
   function fingerprint(pl) {
     if (!pl) return '';
-    var s = (pl.quoteDate || '') + '|' + (pl.mkt ? pl.mkt.temp : '');
+    var s = (pl.quoteDate || '') + '|' + (pl.mkt ? pl.mkt.temp : '') +
+      '|' + (pl.horizon ? pl.horizon.key : 'S');
     (pl.picks || []).forEach(function (x) { s += '|' + x.code + ':' + x.total; });
     var h = 0;
     for (var i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; }
@@ -129,7 +130,11 @@
     }
 
     var pl = payload();
-    var head = '<div class="card-h"><div><span class="eyebrow">AI REVIEW</span><h2>AI 复核</h2></div>' +
+    var hzTag = (pl && pl.horizon)
+      ? '<span class="pk-hz-chip pk-hz-chip-' + String(pl.horizon.key || 'S').toLowerCase() + '">' +
+        esc(pl.horizon.label) + '口径</span>'
+      : '';
+    var head = '<div class="card-h"><div><span class="eyebrow">AI REVIEW</span><h2>AI 复核</h2>' + hzTag + '</div>' +
       '<span class="hint">' + (S.status
         ? esc(S.status.provider_label) + ' · ' + esc(S.status.model) + ' · Key ' + esc(S.status.key_masked)
         : '') +
@@ -398,8 +403,9 @@
       S.resultFp = null;
       var pk = picker();
       if (pk && pk.setAI) pk.setAI(null);
-      render();
     }
+    /* 即使没有旧结论也要重绘：切换周期档后，标题上的「短线/中线/长线口径」必须跟着变 */
+    render();
   }
 
   window.EB_AI = { mount: mount, run: runReview, check: check, state: S };

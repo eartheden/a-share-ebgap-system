@@ -1,0 +1,316 @@
+/* ============================================================
+   09 · 虚拟持仓 · 模拟交易台  Paper Trading Desk
+   作用域全部限定在 #v-paper 内，不污染其它模块
+   ============================================================ */
+
+#v-paper {
+  --pp-up: var(--buy);          /* A 股习惯：涨 = 红 */
+  --pp-down: var(--sell);       /* 跌 = 绿 */
+  --pp-s: #ff9a4d;
+  --pp-m: #38bdf8;
+  --pp-l: #a78bfa;
+}
+
+/* ---------- 顶部操作条 ---------- */
+.pp-topbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 16px;
+}
+.pp-topbar .pp-note {
+  font-size: 12px; color: var(--ink3); margin-left: auto;
+  display: flex; align-items: center; gap: 6px;
+}
+.pp-topbar .pp-note i {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--sell); box-shadow: 0 0 0 3px rgba(0, 229, 160, .14);
+}
+.pp-topbar .pp-note.stale i { background: var(--warn); box-shadow: 0 0 0 3px rgba(245, 185, 66, .16); }
+
+.pp-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 34px; padding: 0 14px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: border-color .16s, background .16s, transform .16s;
+}
+.pp-btn:hover { border-color: rgba(56, 189, 248, .45); background: rgba(56, 189, 248, .08); }
+.pp-btn:active { transform: translateY(1px); }
+.pp-btn[disabled] { opacity: .5; cursor: not-allowed; }
+.pp-btn-main {
+  border-color: transparent; color: #04121f;
+  background: linear-gradient(135deg, #7dd3fc, #38bdf8 55%, #6366f1);
+  box-shadow: 0 6px 20px rgba(56, 189, 248, .22);
+}
+.pp-btn-main:hover { background: linear-gradient(135deg, #8fdcff, #48c4ff 55%, #7376ff); }
+.pp-btn-ghost { background: transparent; }
+.pp-btn-sm { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 7px; }
+.pp-btn-danger:hover { border-color: rgba(255, 77, 109, .55); background: rgba(255, 77, 109, .1); color: #ff8fa3; }
+
+/* ---------- 账户概览 ---------- */
+.pp-kpis {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px;
+  margin-bottom: 14px;
+}
+.pp-kpi {
+  position: relative; overflow: hidden;
+  padding: 14px 15px 13px; border: 1px solid var(--line); border-radius: 12px;
+  background: linear-gradient(180deg, rgba(29, 42, 65, .5), rgba(16, 24, 39, .9));
+}
+.pp-kpi:before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  background: var(--acc); opacity: .55;
+}
+.pp-kpi.up:before { background: var(--pp-up); opacity: .8; }
+.pp-kpi.down:before { background: var(--pp-down); opacity: .8; }
+.pp-kpi i {
+  display: block; font-size: 11px; font-style: normal; letter-spacing: .04em;
+  color: var(--ink3); margin-bottom: 7px;
+}
+.pp-kpi b {
+  display: block; font-family: var(--mono); font-size: 22px; font-weight: 700;
+  letter-spacing: -.4px; line-height: 1.1;
+}
+.pp-kpi em {
+  display: block; margin-top: 6px; font-style: normal; font-size: 11.5px; color: var(--ink4);
+}
+.pp-kpi b.up { color: var(--pp-up); }
+.pp-kpi b.down { color: var(--pp-down); }
+
+/* ---------- 纪律预警 ---------- */
+.pp-alerts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.pp-alert {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 13px; border-radius: 10px;
+  border: 1px solid rgba(245, 185, 66, .38); border-left: 3px solid var(--warn);
+  background: rgba(245, 185, 66, .09); font-size: 12.5px; color: var(--ink2);
+}
+.pp-alert.stop { border-color: rgba(255, 77, 109, .38); border-left-color: var(--pp-up); background: rgba(255, 77, 109, .09); }
+.pp-alert.goal { border-color: rgba(0, 229, 160, .34); border-left-color: var(--pp-down); background: rgba(0, 229, 160, .08); }
+.pp-alert b { color: var(--ink); }
+.pp-alert .pp-alert-lab { font-weight: 700; color: var(--ink); white-space: nowrap; }
+.pp-alert button { margin-left: auto; }
+
+/* ---------- 工具条 ---------- */
+.pp-toolbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: rgba(16, 24, 39, .6); margin-bottom: 12px;
+}
+.pp-seg { display: inline-flex; padding: 3px; gap: 3px; border-radius: 8px; background: rgba(29, 42, 65, .55); }
+.pp-seg button {
+  height: 26px; padding: 0 11px; border: 0; border-radius: 6px; cursor: pointer;
+  background: transparent; color: var(--ink3); font-size: 12px; font-weight: 600;
+}
+.pp-seg button.on { background: rgba(56, 189, 248, .16); color: #7dd3fc; }
+.pp-search {
+  flex: 1 1 180px; min-width: 150px; height: 30px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: rgba(7, 11, 20, .7);
+  color: var(--ink); font-size: 12.5px;
+}
+.pp-search:focus { outline: none; border-color: rgba(56, 189, 248, .5); }
+.pp-toolbar select {
+  height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: rgba(7, 11, 20, .7); color: var(--ink2); font-size: 12px;
+}
+.pp-toolbar .pp-count { margin-left: auto; font-size: 12px; color: var(--ink3); font-family: var(--mono); }
+
+/* ---------- 持仓表 ---------- */
+.pp-tablewrap { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--card); }
+.pp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.pp-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  padding: 10px 12px; text-align: left; white-space: nowrap;
+  font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--ink3);
+  background: #0d1524; border-bottom: 1px solid var(--line);
+}
+.pp-table thead th.num { text-align: right; }
+.pp-table tbody tr {
+  cursor: pointer;
+  transition: background .14s;
+}
+.pp-table tbody tr:hover { background: rgba(56, 189, 248, .06); }
+.pp-table tbody tr.warn-row { background: rgba(245, 185, 66, .05); }
+.pp-table tbody tr.stop-row { background: rgba(255, 77, 109, .06); }
+.pp-table td {
+  padding: 11px 12px; border-bottom: 1px solid var(--line2); vertical-align: middle;
+}
+.pp-table tbody tr:last-child td { border-bottom: 0; }
+.pp-table td.num { text-align: right; font-family: var(--mono); }
+.pp-table .pp-name { display: flex; flex-direction: column; gap: 2px; min-width: 96px; }
+.pp-table .pp-name b { font-size: 13px; color: var(--ink); display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.pp-table .pp-name span { font-size: 11px; color: var(--ink4); font-family: var(--mono); white-space: nowrap; }
+.pp-table .pp-sub { display: block; font-size: 10.5px; color: var(--ink4); font-family: var(--mono); margin-top: 2px; white-space: nowrap; }
+.pp-table .up { color: var(--pp-up); }
+.pp-table .down { color: var(--pp-down); }
+.pp-table .flat { color: var(--ink3); }
+
+.pp-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 17px; padding: 0 5px; border-radius: 5px;
+  font-size: 10.5px; font-weight: 700; font-family: var(--mono);
+}
+.pp-badge-s { color: #ffb27a; background: rgba(255, 154, 77, .16); border: 1px solid rgba(255, 154, 77, .34); }
+.pp-badge-m { color: #7dd3fc; background: rgba(56, 189, 248, .16); border: 1px solid rgba(56, 189, 248, .34); }
+.pp-badge-l { color: #c4b5fd; background: rgba(167, 139, 250, .16); border: 1px solid rgba(167, 139, 250, .34); }
+
+.pp-meter { width: 74px; height: 5px; border-radius: 3px; background: rgba(120, 140, 175, .18); overflow: hidden; margin-left: auto; }
+.pp-meter i { display: block; height: 100%; border-radius: 3px; background: var(--acc); }
+.pp-meter.risk i { background: linear-gradient(90deg, var(--warn), var(--pp-up)); }
+.pp-meter.near i { background: linear-gradient(90deg, #38bdf8, var(--pp-down)); }
+
+.pp-flag {
+  display: inline-block; padding: 1px 6px; border-radius: 4px;
+  font-size: 10.5px; font-weight: 600; white-space: nowrap;
+}
+.pp-flag-stop { color: #ff9db0; background: rgba(255, 77, 109, .14); }
+.pp-flag-goal { color: #7ff0c8; background: rgba(0, 229, 160, .12); }
+.pp-flag-time { color: #f6cd83; background: rgba(245, 185, 66, .14); }
+.pp-flag-out { color: var(--ink3); background: rgba(120, 140, 175, .14); }
+
+.pp-row-act { display: flex; gap: 6px; justify-content: flex-end; }
+.pp-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  height: 26px; padding: 0 9px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--line); background: transparent; color: var(--ink2);
+  font-size: 11.5px; white-space: nowrap;
+}
+.pp-icon-btn:hover { border-color: rgba(56, 189, 248, .5); color: #7dd3fc; background: rgba(56, 189, 248, .08); }
+.pp-icon-btn.sell:hover { border-color: rgba(255, 77, 109, .5); color: #ff9db0; background: rgba(255, 77, 109, .1); }
+
+/* ---------- 双栏（行业分布 / 资金曲线） ---------- */
+.pp-cols { display: grid; grid-template-columns: 1fr 1.35fr; gap: 14px; margin-top: 14px; }
+.pp-panel { border: 1px solid var(--line); border-radius: 12px; background: var(--card); padding: 14px 15px 12px; }
+.pp-panel-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.pp-panel-h h3 { font-size: 13px; margin: 0; color: var(--ink); letter-spacing: 0; }
+.pp-panel-h span { font-size: 11px; color: var(--ink4); }
+
+.pp-indbar { display: flex; flex-direction: column; gap: 9px; }
+.pp-indrow { display: grid; grid-template-columns: 1fr 52px; gap: 8px; align-items: center; font-size: 12px; }
+.pp-indrow .pp-indname { display: flex; flex-direction: column; gap: 4px; }
+.pp-indrow .pp-indname em { font-style: normal; color: var(--ink2); font-size: 12px; }
+.pp-indrow .pp-indname i { display: block; height: 5px; border-radius: 3px; background: rgba(120, 140, 175, .16); overflow: hidden; }
+.pp-indrow .pp-indname i b { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, rgba(56, 189, 248, .55), #38bdf8); }
+.pp-indrow > span { text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--ink3); }
+
+.pp-chart { width: 100%; height: 190px; }
+.pp-chart-lg { width: 100%; height: 320px; }
+
+/* ---------- 已平仓 ---------- */
+.pp-closed-h { display: flex; align-items: baseline; justify-content: space-between; margin: 18px 0 10px; }
+.pp-closed-h h3 { font-size: 14px; margin: 0; }
+.pp-closed-h span { font-size: 11.5px; color: var(--ink4); }
+
+/* ---------- 空态 ---------- */
+.pp-empty {
+  padding: 34px 20px; text-align: center; border: 1px dashed var(--line);
+  border-radius: 12px; color: var(--ink3); font-size: 13px; line-height: 1.9;
+}
+.pp-empty b { color: var(--ink); }
+.pp-empty .pp-btn { margin-top: 14px; }
+
+/* ---------- 详情抽屉 ---------- */
+/* 抽屉容器是全屏 fixed 层。关键：关闭时必须 pointer-events:none，
+   否则这个 100vw×100vh 的层会一直盖在页面上拦截所有鼠标点击
+   （opacity:0 只是透明，仍然参与命中测试），表现为「点击全面失灵」。 */
+.pp-drawer { position: fixed; inset: 0; z-index: 90; pointer-events: none; }
+.pp-drawer.on { pointer-events: auto; }
+.pp-mask {
+  position: absolute; inset: 0; background: rgba(3, 6, 12, .62);
+  backdrop-filter: blur(2px); opacity: 0; transition: opacity .2s;
+}
+.pp-drawer.on .pp-mask { opacity: 1; }
+.pp-drawer-panel {
+  position: absolute; top: 0; right: 0; bottom: 0; width: min(720px, 94vw);
+  display: flex; flex-direction: column;
+  background: linear-gradient(180deg, #0c1322, #080d18);
+  border-left: 1px solid var(--line);
+  box-shadow: -30px 0 80px rgba(0, 0, 0, .6);
+  transform: translateX(24px); opacity: 0; transition: transform .22s ease, opacity .22s;
+}
+.pp-drawer.on .pp-drawer-panel { transform: none; opacity: 1; }
+.pp-dhead {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 16px 18px 14px; border-bottom: 1px solid var(--line);
+}
+.pp-dhead .pp-ttl { flex: 1; min-width: 0; }
+.pp-dhead .pp-ttl b { display: flex; align-items: center; gap: 8px; font-size: 17px; }
+.pp-dhead .pp-ttl span { display: block; margin-top: 4px; font-size: 11.5px; color: var(--ink4); font-family: var(--mono); }
+.pp-panel-x {
+  width: 30px; height: 30px; border-radius: 8px; cursor: pointer; flex: none;
+  border: 1px solid var(--line); background: transparent; color: var(--ink3);
+  font-size: 16px; line-height: 1;
+}
+.pp-panel-x:hover { color: var(--ink); border-color: rgba(56, 189, 248, .45); }
+.pp-panel-body { flex: 1; overflow: auto; padding: 16px 18px 22px; }
+
+.pp-quote { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.pp-quote b { font-family: var(--mono); font-size: 30px; letter-spacing: -1px; }
+.pp-quote em { font-style: normal; font-family: var(--mono); font-size: 13px; }
+.pp-quote .pp-quote-lab { font-size: 11.5px; color: var(--ink4); }
+
+.pp-statgrid {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0;
+}
+.pp-stat {
+  padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px;
+  background: rgba(16, 24, 39, .72);
+}
+.pp-stat i { display: block; font-style: normal; font-size: 10.5px; color: var(--ink4); margin-bottom: 4px; }
+.pp-stat b { display: block; font-family: var(--mono); font-size: 14px; }
+
+.pp-plan {
+  margin-top: 14px; padding: 12px 13px; border: 1px solid var(--line);
+  border-radius: 10px; background: rgba(16, 24, 39, .6);
+}
+.pp-plan-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.pp-plan-h b { font-size: 12.5px; }
+.pp-plan-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.pp-field { display: flex; flex-direction: column; gap: 4px; }
+.pp-field label { font-size: 10.5px; color: var(--ink4); }
+.pp-field input, .pp-field textarea {
+  width: 100%; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px;
+  background: rgba(7, 11, 20, .8); color: var(--ink); font-family: var(--mono); font-size: 12.5px;
+}
+.pp-field textarea { font-family: inherit; resize: vertical; min-height: 54px; }
+.pp-field input:focus, .pp-field textarea:focus { outline: none; border-color: rgba(56, 189, 248, .5); }
+.pp-plan-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.pp-plan-foot .pp-hint { font-size: 11px; color: var(--ink4); margin-right: auto; }
+
+.pp-panel-act { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+
+.pp-loading { padding: 40px 0; text-align: center; color: var(--ink3); font-size: 12.5px; }
+.pp-loading .pp-spin {
+  display: inline-block; width: 16px; height: 16px; margin-right: 8px; vertical-align: -3px;
+  border: 2px solid rgba(56, 189, 248, .25); border-top-color: #38bdf8; border-radius: 50%;
+  animation: pp-spin .8s linear infinite;
+}
+@keyframes pp-spin { to { transform: rotate(360deg); } }
+
+/* ---------- 提示条（挂在 body 上，选股页开仓时也要能看到） ---------- */
+.pp-toast {
+  position: fixed; left: 50%; bottom: 32px; z-index: 140;
+  transform: translate(-50%, 16px); opacity: 0; pointer-events: none;
+  padding: 10px 16px; border-radius: 10px; font-size: 12.5px; white-space: nowrap;
+  color: #e8edf7; background: rgba(10, 16, 28, .96);
+  border: 1px solid rgba(56, 189, 248, .42);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .55);
+  transition: opacity .2s, transform .2s;
+}
+.pp-toast.on { opacity: 1; transform: translate(-50%, 0); }
+.pp-toast.bad { border-color: rgba(255, 77, 109, .55); }
+.pp-hint { font-size: 11px; color: var(--ink4); }
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 1180px) {
+  .pp-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pp-cols { grid-template-columns: 1fr; }
+}
+@media (max-width: 860px) {
+  .pp-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pp-statgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pp-plan-grid { grid-template-columns: 1fr; }
+  .pp-tablewrap { overflow-x: auto; }
+  .pp-table { min-width: 720px; }
+  .pp-drawer-panel { width: 100%; }
+  .pp-quote b { font-size: 24px; }
+}

@@ -2,6 +2,7 @@
 ebgap.db
 ebgap.db-journal
 ebgap.db-wal
+ebgap.db.bak_*
 
 # 行情快照缓存
 data/*.json
@@ -16,5 +17,6 @@ __pycache__/
 # 本地 AI Key 配置
 .ebgap-ai.json
 
-# UI 改造前的临时备份（本地保留，不上传）
-.backup-ui-*/
+# 各类临时备份与工具内部目录（本地保留，不上传）
+.backup-*/
+.workbuddy/
