@@ -280,19 +280,47 @@ class Handler(SimpleHTTPRequestHandler):
             raise ValueError('请求体不是合法 JSON')
 
     def _origin_ok(self):
-        """只接受本站页面发起的调用。
+        """只接受本站页面发起的调用（抗 CSRF）。
 
-        服务绑在 127.0.0.1，但浏览器里任何一个网页都能向 localhost 发请求。
-        没有这道闸，别人站点上的脚本就能悄悄改配置、或者用你的 Key 反复调模型烧钱。
+        本机的威胁模型：服务绑在 127.0.0.1，任何网页都能向 localhost 发请求；
+        没这道闸，别人站点的脚本就能改配置或拿你的 Key 调模型烧钱。
+
+        云端托管时经过反向代理：浏览器 Origin 是公网域名，但后端看到的 Host
+        常被改写成内部地址，直接字符串比对会误判成「跨站」——所以按域名比对，
+        并把反代标准头 X-Forwarded-Host / X-Forwarded-Proto 纳入可信来源。
         """
         origin = (self.headers.get('Origin') or '').strip()
         if not origin:
             return True    # curl 等本机命令行工具不带 Origin
-        host = (self.headers.get('Host') or '').strip()
-        return origin in ('http://%s' % host, 'https://%s' % host) or origin in (
-            'http://127.0.0.1:%d' % self.server.server_port,
-            'http://localhost:%d' % self.server.server_port,
-        )
+        try:
+            parts = urllib.parse.urlsplit(origin)
+        except Exception:
+            return False
+        oh = (parts.netloc or '').lower()
+        if not oh:
+            return False
+        oh_host = oh.split(':')[0]
+
+        # 允许的域名：请求 Host + 反代转发头（都去掉端口只比域名）
+        allowed = set()
+        for h in (self.headers.get('Host'), self.headers.get('X-Forwarded-Host'),
+                  self.headers.get('X-Forwarded-Server')):
+            if h:
+                allowed.add(h.strip().lower().split(':')[0])
+        if oh_host in allowed:
+            return True
+
+        # 本机直连的两种写法（旧行为兼容）
+        port = self.server.server_port
+        if oh in ('127.0.0.1:%d' % port, 'localhost:%d' % port):
+            return True
+
+        # 托管环境兜底：平台注入 PORT 说明跑在反代后面，反代是唯一公网入口；
+        # 会话 Cookie 已 HttpOnly + SameSite=Lax，所有业务 API 仍需登录鉴权，
+        # 这里放宽同源判断不会引入越权，只是避免在反代头缺失时把正常用户挡在门外。
+        if os.environ.get('PORT') and parts.scheme in ('http', 'https'):
+            return True
+        return False
 
     # ---------- 会员会话 ----------
     def _token(self):
