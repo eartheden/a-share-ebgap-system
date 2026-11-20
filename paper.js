@@ -12,7 +12,6 @@
 (function () {
   'use strict';
 
-  var CAPITAL = 100000;              // 每笔虚拟本金 = 10 万 × 建议仓位
   var LKEY = 'ebgap.paper.v1';       // 本地快照（离线兜底 / 老数据迁移）
   var MKEY = 'ebgap.paper.migrated.v1';
   var AUTO_MS = 30000;               // 页面可见时自动刷新报价
@@ -98,6 +97,36 @@
     box.textContent = msg;
     clearTimeout(box._t);
     box._t = setTimeout(function () { box.className = 'pp-toast'; }, 2600);
+  }
+
+  /* 自定义确认框：不依赖原生 confirm（部分嵌入环境/无头浏览器会静默拦截，
+     表现为「点了平仓没反应」）。返回 Promise<boolean>。 */
+  function confirmDialog(msg, okText) {
+    return new Promise(function (resolve) {
+      var mask = document.createElement('div');
+      mask.className = 'pp-confirm-mask';
+      mask.innerHTML = '<div class="pp-confirm" role="alertdialog" aria-modal="true">' +
+        '<div class="pp-confirm-msg"></div>' +
+        '<div class="pp-confirm-act">' +
+        '<button class="pp-btn pp-btn-ghost" data-c="0">取消</button>' +
+        '<button class="pp-btn pp-btn-danger" data-c="1"></button></div></div>';
+      mask.querySelector('.pp-confirm-msg').textContent = msg;
+      mask.querySelector('[data-c="1"]').textContent = okText || '确认';
+      function done(v) {
+        document.removeEventListener('keydown', onKey);
+        if (mask.parentNode) mask.parentNode.removeChild(mask);
+        resolve(v);
+      }
+      function onKey(e) { if (e.key === 'Escape') done(false); }
+      mask.addEventListener('click', function (e) {
+        if (e.target === mask) return done(false);
+        var b = e.target.closest('[data-c]');
+        if (b) done(b.dataset.c === '1');
+      });
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(mask);
+      mask.querySelector('[data-c="1"]').focus();
+    });
   }
 
   /* ---------------- 接口 ---------------- */
@@ -356,17 +385,10 @@
       else if (t1 > 0 && cur >= t1) out.push({ kind: 'goal', t: t, text: '已达第一目标 ' + fx(t1) + '（' + pct(t._ret) + '），至少减半仓' });
       var hi = holdUpper(t.hold);
       if (hi && t._days > hi) out.push({ kind: 'time', t: t, text: '已持有 ' + t._days + ' 个交易日，超出建议的 ' + esc(t.hold) + '，逻辑没兑现就换股' });
-      var inList = inTodayList(t.code);
-      if (inList === false) out.push({ kind: 'out', t: t, text: '已掉出今日选股名单，模型不再看好，可考虑减仓' });
+      /* 「出榜」提醒已移除：选股名单只有十几只三档候选，持仓票大多本就不在其中，
+         几乎每笔都会误报「掉出名单」，反而淹没真正的止损/超期提醒。 */
     });
     return out;
-  }
-
-  function inTodayList(code) {
-    var P = window.EB_PICKER && window.EB_PICKER.state;
-    if (!P || !P.allPicks || !P.allPicks.length) return null;   // 未加载过选股数据，不做判断
-    for (var i = 0; i < P.allPicks.length; i++) if (P.allPicks[i].code === code) return true;
-    return false;
   }
 
   /* ---------------- 骨架 ---------------- */
@@ -464,8 +486,14 @@
     renderTableOnly(st);
     renderCols(st);
     renderClosed(st);
-    /* 只在抽屉开着时刷新报价行：整块重建会把正在编辑的止损/备注冲掉 */
-    if (S.drawerId) refreshDrawerQuote();
+    /* 抽屉开着时：若这笔已被自动平仓（tick 触发止损/止盈），整块重建，
+       否则会残留「调整计划 / 按现价平仓」表单，点了没反应。
+       仍在持仓中则只刷新报价行，避免冲掉正在编辑的止损/备注。 */
+    if (S.drawerId) {
+      var d = byId(S.drawerId);
+      if (!d || d.status !== 'open') refreshDrawer();
+      else refreshDrawerQuote();
+    }
   }
 
   function renderNote(st) {
@@ -582,7 +610,6 @@
       else if (open && dStop != null && dStop <= 2.2) flags.push('<span class="pp-flag pp-flag-stop">临界</span>');
       if (open && t1 > 0 && cur >= t1) flags.push('<span class="pp-flag pp-flag-goal">达目标</span>');
       if (open && holdUpper(t.hold) && days > holdUpper(t.hold)) flags.push('<span class="pp-flag pp-flag-time">超期</span>');
-      if (open && inTodayList(t.code) === false) flags.push('<span class="pp-flag pp-flag-out">出榜</span>');
       if (!open) flags.push('<span class="pp-flag pp-flag-out">' + esc(t.closeReason || '已平仓') + '</span>');
 
       return '<tr class="' + rowCls + '" data-id="' + t.id + '">' +
@@ -773,10 +800,15 @@
     if (!t || t.status !== 'open') return;
     var cur = priceOf(t);
     var ret = (cur / t.buyPrice - 1) * 100;
-    if (!confirm('按现价 ' + fx(cur) + ' 平掉「' + t.name + '」这笔模拟仓？\n' +
+    confirmDialog('按现价 ' + fx(cur) + ' 平掉「' + t.name + '」这笔模拟仓？\n' +
       '本笔盈亏 ' + pct(ret) + '（' + money((cur - t.buyPrice) * t.shares) + '）\n\n' +
-      '这是虚拟交易，不涉及真实资金。')) return;
+      '这是虚拟交易，不涉及真实资金。', '确认平仓').then(function (yes) {
+      if (!yes) return;
+      doClose(t, cur, ret);
+    });
+  }
 
+  function doClose(t, cur, ret) {
     var p = apiPost('/api/paper/close', {
       id: t.id, price: cur, reason: '手动平仓',
       close_date: ymd(new Date()), close_at: Date.now()
@@ -818,18 +850,21 @@
   }
 
   function clearAll() {
-    if (!confirm('清空全部模拟持仓与历史记录？数据库中的记录会一并删除，此操作不可恢复。')) return;
-    var btn = el('pp-clear');
-    btn.disabled = true; btn.textContent = '清空中…';
-    apiPost('/api/paper/clear', {}).then(function (res) {
-      btn.disabled = false; btn.textContent = '清空记录';
-      if (!res || !res.ok) { toast('清空失败：数据库未确认', 'bad'); return; }
-      S.trades = []; saveLocal(); render(); dispatchToPicker();
-      toast('记录已清空');
-    }).catch(function () {
-      btn.disabled = false; btn.textContent = '清空记录';
-      toast('清空失败：无法连接本地数据库', 'bad');
-    });
+    confirmDialog('清空全部模拟持仓与历史记录？数据库中的记录会一并删除，此操作不可恢复。', '确认清空')
+      .then(function (yes) {
+        if (!yes) return;
+        var btn = el('pp-clear');
+        btn.disabled = true; btn.textContent = '清空中…';
+        apiPost('/api/paper/clear', {}).then(function (res) {
+          btn.disabled = false; btn.textContent = '清空记录';
+          if (!res || !res.ok) { toast('清空失败：数据库未确认', 'bad'); return; }
+          S.trades = []; saveLocal(); render(); dispatchToPicker();
+          toast('记录已清空');
+        }).catch(function () {
+          btn.disabled = false; btn.textContent = '清空记录';
+          toast('清空失败：无法连接本地数据库', 'bad');
+        });
+      });
   }
 
   function exportCsv() {
@@ -1157,10 +1192,10 @@
     if (!pick || !pick.plan || !(pick.price > 0)) return;
     if (findOpen(pick.code)) { toast('「' + pick.name + '」已有持仓，不重复开仓', 'bad'); return; }
 
+    /* 固定每次买入 100 手（1 手 = 100 股，即 10000 股）。
+       不再按建议仓位算股数，也不管买得起买不起——虚拟交易，统一口径便于横向比较。 */
+    var shares = 100 * 100;
     var pos = pick.plan.pos || 10;
-    var capital = Math.round(CAPITAL * pos / 100);
-    var shares = Math.floor(capital / pick.price / 100) * 100;
-    if (shares < 100) shares = 100;      // 高价股至少一手
 
     var t = {
       id: -Date.now(), code: pick.code, name: pick.name, ind: pick.ind,
@@ -1188,7 +1223,7 @@
       if (opts.onDone) opts.onDone();
     });
 
-    toast('已模拟买入 ' + pick.name + ' ' + shares + ' 股（' + money(shares * pick.price) + '）');
+    toast('已模拟买入 ' + pick.name + ' 100 手（' + shares + ' 股，' + money(shares * pick.price) + '）');
   }
 
   /* ---------------- 入口 ---------------- */

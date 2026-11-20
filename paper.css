@@ -314,3 +314,22 @@
   .pp-drawer-panel { width: 100%; }
   .pp-quote b { font-size: 24px; }
 }
+
+/* ---------- 自定义确认框（替代原生 confirm） ---------- */
+.pp-confirm-mask {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(3, 6, 12, .72); backdrop-filter: blur(3px);
+  padding: 20px;
+}
+.pp-confirm {
+  width: min(400px, 100%);
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.6);
+  padding: 20px;
+}
+.pp-confirm-msg {
+  font-size: 13px; line-height: 1.75; color: var(--ink);
+  white-space: pre-line; margin-bottom: 18px;
+}
+.pp-confirm-act { display: flex; justify-content: flex-end; gap: 10px; }

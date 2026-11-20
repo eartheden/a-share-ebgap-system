@@ -31,6 +31,8 @@ import urllib.parse
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
+import auth   # 会员系统：认证 / 会话 / 权限 / 数据隔离
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CONF = os.path.expanduser('~/.ebgap-ai.json')
 DB = os.path.join(ROOT, 'ebgap.db')
@@ -72,8 +74,18 @@ def masked(key):
     return '****' + key[-4:]
 
 
-def status_payload():
-    c = load_conf()
+def status_payload(user_id=None, db=None):
+    """AI 配置状态。会员各自一套 Key：库里有就用库里的，没有则回退旧全局文件
+    （老用户平滑迁移），都不存在时用环境变量。永不返回明文 Key。"""
+    c = {}
+    if user_id and db is not None:
+        c = auth.load_ai_config(db, user_id)
+        if not c.get('api_key'):
+            # 旧全局 Key 只给「首个管理员」兜底（他是原单机使用者）；
+            # 新注册的会员绝不能拿到别人的 Key，否则会替别人烧额度。
+            first = db.execute("SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1").fetchone()
+            if first and first['id'] == user_id:
+                c = dict(load_conf())
     key = c.get('api_key') or os.environ.get('EBGAP_API_KEY', '')
     provider = c.get('provider') or ('deepseek' if key else '')
     preset = PROVIDERS.get(provider, {})
@@ -135,16 +147,22 @@ def build_user_prompt(payload):
                                        for i in mkt['idx']))
     lines.append('')
     lines.append('【候选名单】以下 %d 只已通过「%s」档的硬性过滤，'
-                 '综合分是六维加权后再按本档口径合成的结果：D1 资金动能、D2 量价强度、D3 位置空间、'
-                 'D4 行业动能、D5 流动性、D6 质量安全；V 为估值分（PE/PB 行业相对水平）。' % (len(picks), hz_label.split('（')[0]))
+                 '综合分是七维加权后按本档口径合成：D1 资金动能、D2 量价强度、D3 位置空间、'
+                 'D4 行业动能、D5 流动性、D6 质量安全、D7 前瞻信号（吸筹潜伏/蓄势/未透支/行业轮动位，'
+                 '短线权重最高，用于避免追当日涨幅榜）；V 为估值分（PE/PB 行业相对水平）。'
+                 '注意：名单刻意排除了当日涨幅过大、位置过高的追高标的。'
+                 % (len(picks), hz_label.split('（')[0]))
     for i, p in enumerate(picks, 1):
+        fw = p.get('forward') or {}
         lines.append(
-            '%d. %s %s | 行业 %s | 现价 %.2f (%+.2f%%) | 综合 %.1f | D1-D6: %s,%s,%s,%s,%s,%s | V %s | '
+            '%d. %s %s | 行业 %s | 现价 %.2f (%+.2f%%) | 综合 %.1f | D1-D7: %s,%s,%s,%s,%s,%s,%s | V %s | '
+            '前瞻细分[吸筹%s/蓄势%s/空间%s/轮动%s] | '
             '主力净额 %.2f 亿（占成交额 %.1f%%）| 换手 %.1f%% | 量比 %.2f | 成交额 %.2f 亿 | 市值 %.0f 亿 | '
             '近60日 %+.1f%% | 年内 %+.1f%% | PE %s | PB %s | ROE %s | 净利同比 %+.1f%%'
             % (i, p.get('code'), p.get('name'), p.get('ind'), p.get('price', 0), p.get('pct', 0),
-               p.get('total', 0), p.get('d1'), p.get('d2'), p.get('d3'), p.get('d4'), p.get('d5'), p.get('d6'),
+               p.get('total', 0), p.get('d1'), p.get('d2'), p.get('d3'), p.get('d4'), p.get('d5'), p.get('d6'), p.get('d7', '—'),
                p.get('value', '—'),
+               fw.get('absorb', '—'), fw.get('coil', '—'), fw.get('head', '—'), fw.get('rotation', '—'),
                (p.get('net') or 0) / 1e8, p.get('netRatio') or 0, p.get('turn') or 0, p.get('volRatio') or 0,
                (p.get('amt') or 0) / 1e8, (p.get('cap') or 0) / 1e8, p.get('d60') or 0, p.get('ytd') or 0,
                ('%.1f' % p['pe']) if (p.get('pe') or 0) > 0 else '亏损',
@@ -276,6 +294,50 @@ class Handler(SimpleHTTPRequestHandler):
             'http://localhost:%d' % self.server.server_port,
         )
 
+    # ---------- 会员会话 ----------
+    def _token(self):
+        """从 Cookie 取会话 token（HttpOnly，JS 读不到）。"""
+        raw = self.headers.get('Cookie') or ''
+        for part in raw.split(';'):
+            k, _, v = part.strip().partition('=')
+            if k == auth.COOKIE_NAME:
+                return v
+        return None
+
+    def _session(self):
+        """返回 (db连接, 用户行)；无效则 (conn, None)。调用方负责在 finally 关闭。"""
+        conn = db_conn()
+        try:
+            return conn, auth.user_by_token(conn, self._token())
+        except Exception:
+            conn.close()
+            raise
+
+    def _set_cookie(self, token, delete=False):
+        # Path=/ 覆盖全站；HttpOnly 防 XSS 窃取；SameSite=Lax 抗 CSRF；
+        # 仅 https 或反代环境加 Secure（本机能用 http）。
+        secure = '; Secure' if os.environ.get('PORT') else ''
+        if delete:
+            val = '%s=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax%s' % (auth.COOKIE_NAME, secure)
+        else:
+            val = '%s=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax%s' % (
+                auth.COOKIE_NAME, token, auth.SESSION_TTL, secure)
+        self.send_header('Set-Cookie', val)
+
+    def _json_with_cookie(self, obj, cookie, code=200):
+        body = json.dumps(obj, ensure_ascii=False).encode('utf-8')
+        self._cache_set = True
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self._set_cookie(cookie, delete=(cookie is None))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _need_auth(self):
+        return self._json({'ok': False, 'error': '请先登录', 'unauthorized': True}, 401)
+
     def _bytes(self, body, code=200):
         self._cache_set = True
         self.send_response(code)
@@ -286,8 +348,38 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        # 当前登录者（所有 /api/* 都要鉴权，除 /api/auth/* 自己）
+        if self.path.startswith('/api/auth/'):
+            return self._auth_get()
+        if self.path.startswith('/api/'):
+            conn, user = self._session()
+            if not user:
+                conn.close()
+                return self._need_auth()
+            try:
+                return self._authed_get(conn, user)
+            finally:
+                conn.close()
+        # 静态资源本身放行（登录页要能加载 HTML/JS/CSS）
+        p = self.path.split('?')[0]
+        if p.endswith('.py') or '/.' in p or p.endswith('.db'):
+            return self._json({'ok': False, 'error': 'not found'}, 404)
+        return super().do_GET()
+
+    def _auth_get(self):
+        """未登录也可访问的接口：只看当前是谁。"""
+        conn, user = self._session()
+        try:
+            if self.path.startswith('/api/auth/me'):
+                return self._json({'ok': True, 'user': auth.row_public(user) if user else None})
+            return self._json({'ok': False, 'error': 'unknown auth endpoint'}, 404)
+        finally:
+            conn.close()
+
+    def _authed_get(self, conn, user):
+        uid = user['id']
         if self.path.startswith('/api/ai/status'):
-            return self._json(status_payload())
+            return self._json(status_payload(uid, conn))
         if self.path.startswith('/api/market/'):
             qs = urllib.parse.urlparse(self.path).query
             try:
@@ -308,68 +400,214 @@ class Handler(SimpleHTTPRequestHandler):
             qs = urllib.parse.urlparse(self.path).query
             return self._json(stock_suggest_payload(qs))
         if self.path.startswith('/api/paper/list'):
-            return self._json({'ok': True, 'trades': paper_list()})
+            return self._json({'ok': True, 'trades': paper_list(uid)})
         if self.path.startswith('/api/advice/daily') or self.path.startswith('/api/advice/list'):
             qs = urllib.parse.urlparse(self.path).query
             params = urllib.parse.parse_qs(qs)
             date = (params.get('date') or [None])[0]
             limit = int((params.get('limit') or ['20'])[0])
-            return self._json({'ok': True, 'advice': advice_get(date=date, limit=limit)})
-        # 不把服务端源码本身当静态文件发出去
-        p = self.path.split('?')[0]
-        if p.endswith('.py') or '/.' in p or p.endswith('.db'):
-            return self._json({'ok': False, 'error': 'not found'}, 404)
-        return super().do_GET()
+            return self._json({'ok': True, 'advice': advice_get(date=date, limit=limit, user_id=uid)})
+        if self.path.startswith('/api/admin/'):
+            return self._admin_get(conn, user)
+        return self._json({'ok': False, 'error': 'unknown endpoint'}, 404)
 
     def do_POST(self):
         if not self._origin_ok():
             return self._json({'ok': False, 'error': '拒绝跨站调用'}, 403)
         try:
-            if self.path.startswith('/api/ai/config'):
-                data = self._read_json()
-                conf = load_conf()
-                provider = (data.get('provider') or conf.get('provider') or 'deepseek').strip()
-                preset = PROVIDERS.get(provider, {})
-                if data.get('clear_key'):
-                    conf.pop('api_key', None)
-                elif data.get('api_key'):
-                    # 留空表示「不改动已保存的 Key」，不做清空（清空请传 clear_key）
-                    conf['api_key'] = str(data['api_key']).strip()
-                conf['provider'] = provider
-                conf['base_url'] = (data.get('base_url') or preset.get('base_url') or '').strip()
-                conf['model'] = (data.get('model') or preset.get('model') or '').strip()
-                save_conf(conf)
-                return self._json({'ok': True, 'status': status_payload()})
-
-            if self.path.startswith('/api/ai/review'):
-                data = self._read_json()
-                conf = load_conf()
-                out = call_llm(conf, data)
-                return self._json({'ok': True, **out})
-
-            if self.path.startswith('/api/paper/buy'):
-                return self._json(paper_buy(self._read_json()))
-
-            if self.path.startswith('/api/paper/close'):
-                return self._json(paper_close(self._read_json()))
-
-            if self.path.startswith('/api/paper/tick'):
-                return self._json(paper_tick(self._read_json()))
-
-            if self.path.startswith('/api/paper/update'):
-                return self._json(paper_update(self._read_json()))
-
-            if self.path.startswith('/api/paper/clear'):
-                return self._json(paper_clear())
-
-            if self.path.startswith('/api/advice/daily'):
-                return self._json(advice_upsert(self._read_json()))
-
-            return self._json({'ok': False, 'error': 'unknown endpoint'}, 404)
+            # 认证接口：无需登录
+            if self.path.startswith('/api/auth/'):
+                return self._auth_post()
+            conn, user = self._session()
+            if not user:
+                conn.close()
+                return self._need_auth()
+            try:
+                return self._authed_post(conn, user)
+            finally:
+                conn.close()
         except ValueError as e:
             return self._json({'ok': False, 'error': str(e)}, 400)
         except Exception as e:  # noqa: BLE001
             return self._json({'ok': False, 'error': '服务器内部错误：%s' % e}, 500)
+
+    def _auth_post(self):
+        conn = db_conn()
+        try:
+            data = self._read_json()
+            if self.path.startswith('/api/auth/register'):
+                u = auth.register(conn, data.get('username'), data.get('password'))
+                conn.commit()
+                return self._json({'ok': True, 'user': u})
+            if self.path.startswith('/api/auth/login'):
+                token, u = auth.login(conn, data.get('username'), data.get('password'))
+                # 首个管理员登录时把改造前的老持仓/建议归属到自己名下，避免升级后「数据不见了」
+                first_admin = conn.execute(
+                    "SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1").fetchone()
+                migrated = auth.claim_legacy(conn, u['id'],
+                                             bool(first_admin and first_admin['id'] == u['id']))
+                conn.commit()
+                return self._json_with_cookie(
+                    {'ok': True, 'user': u, 'legacy_migrated': migrated}, token)
+            if self.path.startswith('/api/auth/logout'):
+                auth.logout(conn, self._token())
+                conn.commit()
+                return self._json_with_cookie({'ok': True}, None)   # 清 cookie
+            return self._json({'ok': False, 'error': 'unknown auth endpoint'}, 404)
+        finally:
+            conn.close()
+
+    def _authed_post(self, conn, user):
+        uid = user['id']
+        if self.path.startswith('/api/ai/config'):
+            data = self._read_json()
+            conf = auth.load_ai_config(conn, uid)
+            provider = (data.get('provider') or conf.get('provider') or 'deepseek').strip()
+            preset = PROVIDERS.get(provider, {})
+            if data.get('clear_key'):
+                conf.pop('api_key', None)
+            elif data.get('api_key'):
+                conf['api_key'] = str(data['api_key']).strip()
+            conf['provider'] = provider
+            conf['base_url'] = (data.get('base_url') or preset.get('base_url') or '').strip()
+            conf['model'] = (data.get('model') or preset.get('model') or '').strip()
+            auth.save_ai_config(conn, uid, conf)
+            conn.commit()
+            return self._json({'ok': True, 'status': status_payload(uid, conn)})
+
+        if self.path.startswith('/api/ai/review'):
+            data = self._read_json()
+            conf = auth.load_ai_config(conn, uid)
+            if not conf.get('api_key'):
+                # 只有首个管理员可沿用改造前的全局 Key；其他会员必须自己配置
+                first = conn.execute("SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1").fetchone()
+                if first and first['id'] == uid:
+                    conf = load_conf()
+            out = call_llm(conf, data)
+            return self._json({'ok': True, **out})
+
+        if self.path.startswith('/api/paper/buy'):
+            return self._json(paper_buy(self._read_json(), uid))
+        if self.path.startswith('/api/paper/close'):
+            return self._json(paper_close(self._read_json(), uid))
+        if self.path.startswith('/api/paper/tick'):
+            return self._json(paper_tick(self._read_json(), uid))
+        if self.path.startswith('/api/paper/update'):
+            return self._json(paper_update(self._read_json(), uid))
+        if self.path.startswith('/api/paper/clear'):
+            return self._json(paper_clear(uid))
+        if self.path.startswith('/api/advice/daily'):
+            return self._json(advice_upsert(self._read_json(), uid))
+        if self.path.startswith('/api/admin/'):
+            return self._admin_post(conn, user)
+        return self._json({'ok': False, 'error': 'unknown endpoint'}, 404)
+
+    # ---------- 管理员接口（仅 admin） ----------
+    def _require_admin(self, user):
+        if user['role'] != 'admin':
+            return self._json({'ok': False, 'error': '需要管理员权限'}, 403)
+        return None
+
+    def _admin_get(self, conn, user):
+        denied = self._require_admin(user)
+        if denied:
+            return denied
+        if self.path.startswith('/api/admin/users'):
+            rows = conn.execute('''
+                SELECT u.*,
+                  (SELECT COUNT(*) FROM paper_trades p WHERE p.user_id=u.id) AS trades,
+                  (SELECT COUNT(*) FROM sessions s WHERE s.user_id=u.id AND s.expires_at>?) AS online
+                FROM users u ORDER BY u.id
+            ''', (int(time.time()),)).fetchall()
+            out = []
+            for r in rows:
+                d = auth.row_public(r)
+                d['trades'] = r['trades']
+                d['online'] = bool(r['online'])
+                out.append(d)
+            return self._json({'ok': True, 'users': out, 'total': len(out)})
+        if self.path.startswith('/api/admin/stats'):
+            total = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+            active = conn.execute('SELECT COUNT(*) FROM users WHERE active=1').fetchone()[0]
+            admins = conn.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND active=1").fetchone()[0]
+            # 只统计已归属会员的持仓；user_id=0 是改造前的老数据，任何会员都看不到
+            trades = conn.execute('SELECT COUNT(*) FROM paper_trades WHERE user_id>0').fetchone()[0]
+            return self._json({'ok': True, 'stats': {
+                'users': total, 'active': active, 'admins': admins, 'trades': trades}})
+        return self._json({'ok': False, 'error': 'unknown admin endpoint'}, 404)
+
+    def _admin_post(self, conn, user):
+        denied = self._require_admin(user)
+        if denied:
+            return denied
+        data = self._read_json()
+        target = data.get('id')
+        # create 不需要目标 id；其余 user/* 操作必须带有效 id
+        is_create = self.path.startswith('/api/admin/user/create')
+        row = conn.execute('SELECT * FROM users WHERE id=?', (target,)).fetchone() if target else None
+        if self.path.startswith('/api/admin/user/') and not is_create:
+            if not row:
+                return self._json({'ok': False, 'error': '会员不存在'}, 404)
+
+        if self.path.startswith('/api/admin/user/active'):
+            if row['id'] == user['id']:
+                return self._json({'ok': False, 'error': '不能停用自己'}, 400)
+            want = 1 if data.get('active') else 0
+            if row['role'] == 'admin' and want == 0:
+                cnt = conn.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND active=1").fetchone()[0]
+                if cnt <= 1:
+                    return self._json({'ok': False, 'error': '至少保留一名启用的管理员'}, 400)
+            conn.execute('UPDATE users SET active=? WHERE id=?', (want, target))
+            if want == 0:
+                conn.execute('DELETE FROM sessions WHERE user_id=?', (target,))  # 停用即踢下线
+            conn.commit()
+            return self._json({'ok': True, 'user': auth.row_public(
+                conn.execute('SELECT * FROM users WHERE id=?', (target,)).fetchone())})
+
+        if self.path.startswith('/api/admin/user/role'):
+            if row['id'] == user['id']:
+                return self._json({'ok': False, 'error': '不能改自己的角色'}, 400)
+            want = 'admin' if data.get('role') == 'admin' else 'member'
+            if row['role'] == 'admin' and want == 'member':
+                cnt = conn.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND active=1").fetchone()[0]
+                if cnt <= 1:
+                    return self._json({'ok': False, 'error': '至少保留一名管理员'}, 400)
+            conn.execute('UPDATE users SET role=? WHERE id=?', (want, target))
+            conn.commit()
+            return self._json({'ok': True, 'user': auth.row_public(
+                conn.execute('SELECT * FROM users WHERE id=?', (target,)).fetchone())})
+
+        if self.path.startswith('/api/admin/user/reset'):
+            pwd = str(data.get('password') or '')
+            if len(pwd) < auth.MIN_PASSWORD:
+                return self._json({'ok': False, 'error': '新密码至少 %d 位' % auth.MIN_PASSWORD}, 400)
+            conn.execute('UPDATE users SET password=? WHERE id=?', (auth.hash_password(pwd), target))
+            conn.execute('DELETE FROM sessions WHERE user_id=?', (target,))  # 改密后强制重新登录
+            conn.commit()
+            return self._json({'ok': True})
+
+        if self.path.startswith('/api/admin/user/delete'):
+            if row['id'] == user['id']:
+                return self._json({'ok': False, 'error': '不能删除自己'}, 400)
+            # 级联清理该会员的全部数据
+            conn.execute('DELETE FROM paper_trades WHERE user_id=?', (target,))
+            conn.execute('DELETE FROM daily_advice WHERE user_id=?', (target,))
+            conn.execute('DELETE FROM ai_configs WHERE user_id=?', (target,))
+            conn.execute('DELETE FROM sessions WHERE user_id=?', (target,))
+            conn.execute('DELETE FROM users WHERE id=?', (target,))
+            conn.commit()
+            return self._json({'ok': True})
+
+        if self.path.startswith('/api/admin/user/create'):
+            # 管理员直接建号（无需对方自行注册）
+            u = auth.register(conn, data.get('username'), data.get('password'))
+            if data.get('role') == 'admin':
+                conn.execute("UPDATE users SET role='admin' WHERE id=?", (u['id'],))
+                u['role'] = 'admin'
+            conn.commit()
+            return self._json({'ok': True, 'user': u})
+
+        return self._json({'ok': False, 'error': 'unknown admin endpoint'}, 404)
 
     def end_headers(self):
         self.send_header('X-Content-Type-Options', 'nosniff')
@@ -409,6 +647,8 @@ def db_conn():
 
 def db_init():
     with db_conn() as c:
+        # 会员系统：用户 / 会话 / AI 配置表，以及业务表的 user_id 隔离列
+        auth.init_schema(c)
         c.execute('''
             CREATE TABLE IF NOT EXISTS paper_trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -471,14 +711,15 @@ def rows_to_dicts(rows):
     return [{k: r[k] for k in TRADE_COLS if k in r.keys()} for r in rows]
 
 
-def paper_list():
+def paper_list(user_id):
     with db_conn() as c:
         rows = c.execute(
-            'SELECT * FROM paper_trades ORDER BY status = \'closed\', buy_at DESC').fetchall()
+            "SELECT * FROM paper_trades WHERE user_id=? ORDER BY status = 'closed', buy_at DESC",
+            (user_id,)).fetchall()
     return rows_to_dicts(rows)
 
 
-def paper_buy(d):
+def paper_buy(d, user_id):
     """开一笔模拟仓。
 
     幂等规则（防止迁移/重试产生重复记录）：
@@ -493,26 +734,26 @@ def paper_buy(d):
         raise ValueError('缺少 code 或 buy_price')
     with db_conn() as c:
         dup = c.execute(
-            'SELECT * FROM paper_trades WHERE code = ? AND status = \'open\'', (code,)).fetchone()
+            "SELECT * FROM paper_trades WHERE user_id=? AND code = ? AND status = 'open'", (user_id, code)).fetchone()
         if not dup and d.get('buy_at'):
             dup = c.execute(
-                'SELECT * FROM paper_trades WHERE code = ? AND buy_at = ? ORDER BY id LIMIT 1',
-                (code, d.get('buy_at'))).fetchone()
+                'SELECT * FROM paper_trades WHERE user_id=? AND code = ? AND buy_at = ? ORDER BY id LIMIT 1',
+                (user_id, code, d.get('buy_at'))).fetchone()
         if dup:
             return {'ok': True, 'duplicate': True, 'trade': rows_to_dicts([dup])[0]}
         cur = c.execute('''
             INSERT INTO paper_trades
             (code, name, ind, buy_price, buy_date, buy_at, shares, amt,
              suggest_low, suggest_high, stop, t1, t2, hold, pos_pct, score,
-             hz, note, status, cur_price)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'open', ?)
+             hz, note, status, cur_price, user_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'open', ?, ?)
         ''', (
             code, d.get('name'), d.get('ind'), price, d.get('buy_date'), d.get('buy_at'),
             d.get('shares'), d.get('amt'),
             d.get('suggest_low'), d.get('suggest_high'),
             d.get('stop'), d.get('t1'), d.get('t2'),
             d.get('hold'), d.get('pos_pct'), d.get('score'),
-            d.get('hz'), d.get('note'), price,
+            d.get('hz'), d.get('note'), price, user_id,
         ))
         c.commit()
         row = c.execute('SELECT * FROM paper_trades WHERE id = ?', (cur.lastrowid,)).fetchone()
@@ -525,14 +766,14 @@ def _finish(row, price, reason):
     return result, pnl
 
 
-def paper_close(d):
+def paper_close(d, user_id):
     tid = d.get('id')
     price = d.get('price')
     if not tid or not isinstance(price, (int, float)) or price <= 0:
         raise ValueError('缺少 id 或 price')
     with db_conn() as c:
         row = c.execute(
-            'SELECT * FROM paper_trades WHERE id = ? AND status = \'open\'', (tid,)).fetchone()
+            "SELECT * FROM paper_trades WHERE user_id=? AND id = ? AND status = 'open'", (user_id, tid)).fetchone()
         if not row:
             raise ValueError('该笔持仓不存在或已平仓')
         result, pnl = _finish(row, price, d.get('reason'))
@@ -540,25 +781,31 @@ def paper_close(d):
             UPDATE paper_trades SET status='closed', close_price=?, close_date=?,
                 close_at=?, close_reason=?, result_pct=?, pnl=?, cur_price=?,
                 updated_at=datetime('now','localtime')
-            WHERE id = ?
+            WHERE user_id=? AND id = ?
         ''', (price, d.get('close_date'), d.get('close_at'), d.get('reason') or '手动平仓',
-              result, pnl, price, tid))
+              result, pnl, price, user_id, tid))
         c.commit()
-        row = c.execute('SELECT * FROM paper_trades WHERE id = ?', (tid,)).fetchone()
+        row = c.execute('SELECT * FROM paper_trades WHERE user_id=? AND id = ?', (user_id, tid)).fetchone()
     return {'ok': True, 'trade': rows_to_dicts([row])[0]}
 
 
-def paper_tick(d):
+def paper_tick(d, user_id):
     """批量报送最新价：更新现价，触止损/止盈自动平仓。返回有变化的记录。"""
     quotes = d.get('quotes') or {}
     if not isinstance(quotes, dict):
         raise ValueError('quotes 必须是 {code: price} 字典')
     changed = []
     with db_conn() as c:
-        rows = c.execute('SELECT * FROM paper_trades WHERE status = \'open\'').fetchall()
+        rows = c.execute("SELECT * FROM paper_trades WHERE user_id=? AND status = 'open'", (user_id,)).fetchall()
         for row in rows:
             price = quotes.get(row['code'])
             if not isinstance(price, (int, float)) or price <= 0:
+                continue
+            # 报价单位异常防护：上游偶发把「元」报成「分」（×100）或反之，
+            # 若照单执行会把持仓全部误触止盈/止损（4.00 元 → 400 → +9900%）。
+            # 单日不可能偏离买入价 5 倍或跌到 1/5，超出即视为脏数据，跳过该笔。
+            bp = row['buy_price'] or 0
+            if bp > 0 and (price > bp * 5 or price < bp * 0.2):
                 continue
             reason = None
             if row['stop'] and price <= row['stop']:
@@ -571,25 +818,25 @@ def paper_tick(d):
                     UPDATE paper_trades SET status='closed', close_price=?, close_date=?,
                         close_at=?, close_reason=?, result_pct=?, pnl=?, cur_price=?,
                         updated_at=datetime('now','localtime')
-                    WHERE id = ?
-                ''', (price, d.get('date'), d.get('at'), reason, result, pnl, price, row['id']))
+                    WHERE user_id=? AND id = ?
+                ''', (price, d.get('date'), d.get('at'), reason, result, pnl, price, user_id, row['id']))
             else:
                 c.execute(
-                    'UPDATE paper_trades SET cur_price=?, updated_at=datetime(\'now\',\'localtime\') WHERE id=?',
-                    (price, row['id']))
+                    'UPDATE paper_trades SET cur_price=?, updated_at=datetime(\'now\',\'localtime\') WHERE user_id=? AND id=?',
+                    (price, user_id, row['id']))
             changed.append(row['id'])
         c.commit()
-    return {'ok': True, 'changed': changed, 'trades': paper_list()}
+    return {'ok': True, 'changed': changed, 'trades': paper_list(user_id)}
 
 
-def paper_clear():
+def paper_clear(user_id):
     with db_conn() as c:
-        c.execute('DELETE FROM paper_trades')
+        c.execute('DELETE FROM paper_trades WHERE user_id=?', (user_id,))
         c.commit()
     return {'ok': True}
 
 
-def paper_update(d):
+def paper_update(d, user_id):
     """调整一笔持仓的计划：止损 / 目标 / 备注。
 
     只允许改「计划类」字段，不允许改买入价与股数——否则回测就失真了。
@@ -616,7 +863,7 @@ def paper_update(d):
     if 'stop' in fields and 't1' in fields and fields['stop'] >= fields['t1']:
         raise ValueError('止损价必须低于第一目标价')
     with db_conn() as c:
-        row = c.execute('SELECT * FROM paper_trades WHERE id = ?', (tid,)).fetchone()
+        row = c.execute('SELECT * FROM paper_trades WHERE user_id=? AND id = ?', (user_id, tid)).fetchone()
         if not row:
             raise ValueError('该笔持仓不存在')
         stop = fields.get('stop', row['stop'])
@@ -627,14 +874,14 @@ def paper_update(d):
             raise ValueError('止损价不能高于买入价的 120%，请确认是否填错')
         sets = ', '.join('%s = ?' % k for k in fields)
         c.execute(
-            'UPDATE paper_trades SET %s, updated_at = datetime(\'now\', \'localtime\') WHERE id = ?' % sets,
-            tuple(fields.values()) + (tid,))
+            'UPDATE paper_trades SET %s, updated_at = datetime(\'now\', \'localtime\') WHERE user_id=? AND id = ?' % sets,
+            tuple(fields.values()) + (user_id, tid))
         c.commit()
-        row = c.execute('SELECT * FROM paper_trades WHERE id = ?', (tid,)).fetchone()
+        row = c.execute('SELECT * FROM paper_trades WHERE user_id=? AND id = ?', (user_id, tid)).fetchone()
     return {'ok': True, 'trade': rows_to_dicts([row])[0]}
 
 
-def advice_upsert(d):
+def advice_upsert(d, user_id):
     date = str(d.get('date') or '').strip()
     picks = d.get('picks')
     if not date or not isinstance(picks, list) or not picks:
@@ -649,27 +896,26 @@ def advice_upsert(d):
         'hz': p.get('hz'),
     } for p in picks[:15]]
     with db_conn() as c:
+        # 每天每人一条：先删本用户当天旧记录，再插入（date 单列主键无法做复合唯一，
+        # 这样避免改表主键，同时保证「同一用户同一天」只有一条）。
+        c.execute('DELETE FROM daily_advice WHERE date=? AND user_id=?', (date, user_id))
         c.execute('''
-            INSERT INTO daily_advice (date, regime, regime_label, temp, pos_text, note, picks, updated_at)
-            VALUES (?,?,?,?,?,?,?, datetime('now','localtime'))
-            ON CONFLICT(date) DO UPDATE SET
-                regime=excluded.regime, regime_label=excluded.regime_label,
-                temp=excluded.temp, pos_text=excluded.pos_text, note=excluded.note,
-                picks=excluded.picks, updated_at=datetime('now','localtime')
+            INSERT INTO daily_advice (date, regime, regime_label, temp, pos_text, note, picks, updated_at, user_id)
+            VALUES (?,?,?,?,?,?,?, datetime('now','localtime'), ?)
         ''', (date, d.get('regime'), d.get('regime_label'), d.get('temp'),
-              d.get('pos_text'), d.get('note'), json.dumps(slim, ensure_ascii=False)))
+              d.get('pos_text'), d.get('note'), json.dumps(slim, ensure_ascii=False), user_id))
         c.commit()
     return {'ok': True}
 
 
-def advice_get(date=None, limit=20):
+def advice_get(date=None, limit=20, user_id=None):
     with db_conn() as c:
         if date:
-            row = c.execute('SELECT * FROM daily_advice WHERE date = ?', (date,)).fetchone()
+            row = c.execute('SELECT * FROM daily_advice WHERE date = ? AND user_id = ?', (date, user_id)).fetchone()
             rows = [row] if row else []
         else:
             rows = c.execute(
-                'SELECT * FROM daily_advice ORDER BY date DESC LIMIT ?', (limit,)).fetchall()
+                'SELECT * FROM daily_advice WHERE user_id = ? ORDER BY date DESC LIMIT ?', (user_id, limit)).fetchall()
     out = []
     for r in rows:
         item = dict(r)
@@ -1332,11 +1578,17 @@ def _tencent_quote_em(secid):
     return {'rc': 0, 'data': dict(d, src='tencent')}
 
 
-def _tencent_ulist_em(secids_param):
+def _tencent_ulist_em(secids_param, fltt=2):
     """腾讯批量报价 → 东财 /api/qt/ulist.np/get 的 diff 结构。
 
     覆盖 push2 的 ulist.np/get 与 stock/get 同样被网络拦截的场景。
-    一次请求带全部代码，指数与个股都在同一只返回里。"""
+    一次请求带全部代码，指数与个股都在同一只返回里。
+
+    关键：单位必须跟请求的 fltt 一致，否则前端会把价格错当 100 倍：
+      · fltt=2（picker / 虚拟持仓报价）：东财返回「元」float，直接用腾讯的 p[3]（元）
+      · 不带 fltt（live.js 指数行情）：东财返回「分」整数，腾讯 p[3] 要 ×100
+    之前这里无条件 ×100，导致 fltt=2 的现价被放大 100 倍，
+    虚拟持仓全部误触止盈（4.00 元 → 400 → +9900%）。"""
     secids = [s for s in re.split(r'[,\s]+', secids_param or '') if s]
     syms, ok_secids = [], []
     for s in secids:
@@ -1354,11 +1606,13 @@ def _tencent_ulist_em(secids_param):
     with urllib.request.urlopen(req, timeout=8) as r:
         text = r.read().decode('gbk', 'replace')
 
-    def x100(v):
+    def conv(v):
+        """fltt=2 → 元（float，保留 2 位）；否则 → 分（int）。"""
         try:
-            return int(round(float(v) * 100))
+            f = float(v)
         except (TypeError, ValueError):
             return '-'
+        return round(f, 2) if fltt == 2 else int(round(f * 100))
 
     rows = []
     for line in text.split(';'):
@@ -1377,17 +1631,47 @@ def _tencent_ulist_em(secids_param):
             d = _dt.datetime.strptime(stamp[:14], '%Y%m%d%H%M%S')
             ts = int(d.replace(tzinfo=_dt.timezone(_dt.timedelta(hours=8))).timestamp())
         rows.append({
-            'f2': x100(p[3]),            # 现价 ×100
-            'f3': x100(p[32]),           # 涨跌% ×100
+            'f2': conv(p[3]),            # 现价
+            'f3': conv(p[32]),           # 涨跌%
             'f12': code,
             'f14': p[1],
-            'f18': x100(p[4]),           # 昨收 ×100
+            'f18': conv(p[4]),           # 昨收
             'f124': ts,
             'src': 'tencent',
         })
     if not rows:
         raise ValueError('腾讯批量报价返回为空')
     return {'rc': 0, 'data': {'total': len(rows), 'diff': rows}}
+
+
+def _tencent_kline(secid, lmt=240, fqt=1):
+    """腾讯 K 线 → 东财 /api/qt/stock/kline/get 的 klines 结构。
+
+    返回字段顺序与东财 fields2=f51..f57 一致：日期,开,收,高,低,成交量,...
+    fqt=1（前复权）对应腾讯 qfqday；fqt=0 用 day。"""
+    m = re.match(r'^([01])\.(\d{6})$', secid or '')
+    if not m:
+        raise ValueError('secid 无法解析')
+    sym = ('sh' if m.group(1) == '1' else 'sz') + m.group(2)
+    key = 'qfqday' if int(fqt or 0) == 1 else 'day'
+    url = ('https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=%s,day,,,%d,%s'
+           % (sym, max(1, min(1000, int(lmt or 240))), 'qfq' if key == 'qfqday' else ''))
+    req = urllib.request.Request(url, headers={
+        'Referer': 'https://gu.qq.com/', 'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        j = json.loads(r.read().decode('utf-8', 'replace'))
+    node = (j.get('data') or {}).get(sym) or {}
+    days = node.get(key) or node.get('day') or []
+    klines = []
+    for row in days:
+        if len(row) < 6:
+            continue
+        # 东财 klines: 日期,开,收,高,低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率
+        klines.append(','.join([str(row[0]), str(row[1]), str(row[2]), str(row[3]),
+                                str(row[4]), str(row[5]), '', '', '', '', '']))
+    if not klines:
+        raise ValueError('腾讯 K 线返回为空')
+    return {'rc': 0, 'data': {'code': m.group(2), 'klines': klines, 'src': 'tencent'}}
 
 
 def stock_proxy_payload(qs):
@@ -1414,8 +1698,12 @@ def stock_proxy_payload(qs):
                 return {'ok': False, 'error': '数据接口不可达：%s' % e}, 502
         elif '/api/qt/ulist.np/get' in url and 'secids=' in url:
             m = re.search(r'secids=([^&]+)', url)
+            mf = re.search(r'[?&]fltt=(\d+)', url)
+            fltt = int(mf.group(1)) if mf else 1   # 东财缺省 fltt=1（分）
             try:
-                body = json.dumps(_tencent_ulist_em(urllib.parse.unquote(m.group(1)) if m else ''), ensure_ascii=False).encode('utf-8')
+                body = json.dumps(_tencent_ulist_em(
+                    urllib.parse.unquote(m.group(1)) if m else '', fltt=fltt
+                ), ensure_ascii=False).encode('utf-8')
             except Exception as e2:  # noqa: BLE001
                 return {'ok': False, 'error': '行情接口不可达（东财与备用源均失败：%s / %s）' % (e, e2)}, 502
         elif '/api/qt/clist/get' in url:
@@ -1428,6 +1716,19 @@ def stock_proxy_payload(qs):
                 body = json.dumps(_tx_list(pn, pz), ensure_ascii=False).encode('utf-8')
             except Exception as e2:  # noqa: BLE001
                 return {'ok': False, 'error': '行情接口不可达（东财与备用源均失败：%s / %s）' % (e, e2)}, 502
+        elif '/api/qt/stock/kline/get' in url:
+            # K 线兜底：虚拟持仓抽屉的图表依赖它，东财 push2his 常被网络拦截
+            m_sid = re.search(r'secid=([0-9]+\.[0-9]{6})', url)
+            m_lmt = re.search(r'[?&]lmt=(\d+)', url)
+            m_fqt = re.search(r'[?&]fqt=(\d+)', url)
+            try:
+                body = json.dumps(_tencent_kline(
+                    m_sid.group(1) if m_sid else '',
+                    lmt=int(m_lmt.group(1)) if m_lmt else 240,
+                    fqt=int(m_fqt.group(1)) if m_fqt else 1,
+                ), ensure_ascii=False).encode('utf-8')
+            except Exception as e2:  # noqa: BLE001
+                return {'ok': False, 'error': 'K 线接口不可达（东财与备用源均失败：%s / %s）' % (e, e2)}, 502
         else:
             return {'ok': False, 'error': '数据接口不可达：%s' % e}, 502
     if len(_http_cache) > 300:

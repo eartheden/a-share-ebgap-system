@@ -32,25 +32,30 @@
     { key: 'd3', name: '位置空间', short: '位置', desc: '近 60 日与年内涨幅所处位置' },
     { key: 'd4', name: '行业动能', short: '行业', desc: '所属行业当日平均涨幅排名' },
     { key: 'd5', name: '流动性', short: '流动', desc: '成交额与总市值的可交易区间' },
-    { key: 'd6', name: '质量安全', short: '质量', desc: 'ROE、净利增速、PE 排雷' }
+    { key: 'd6', name: '质量安全', short: '质量', desc: 'ROE、净利增速、PE 排雷' },
+    { key: 'd7', name: '前瞻信号', short: '前瞻', desc: '吸筹潜伏、蓄势未透支，面向未来的启动概率' }
   ];
 
   /* ================= 三档持有周期 =================
-     同一批行情，三套完全不同的选股逻辑：
-       S 短线：赚情绪与资金的钱，看当日主力/量能/行业热度，1–5 个交易日
-       M 中线：赚趋势与景气的钱，看 60 日位置与行业持续性，10–30 个交易日
-       L 长线：赚业绩与估值的钱，看 ROE/估值/位置，60–180 个交易日
-     权重 d1–d6 对应六维分数；vw 是「估值分」在合成里的固定占比
-     （短线 vw=0，中线 16%，长线 38%——长线必须把估值算进去）。
+     同一批行情，三套完全不同的选股逻辑。核心改造（2026-11-20）：
+     原来的短线把 60% 权重压在 d1 资金动能 + d2 量价强度上，选出来的是
+     「今天已经涨得好」的股票——那是追已实现的动量，等于接盘。
+     现在新增 d7「前瞻信号」：用吸筹潜伏（资金进但价未大涨）、蓄势未透支
+     （低振幅+位置低+换手温和）来估「未来启动概率」，成为短线第一权重。
+       S 短线：赚启动的钱——资金潜伏 + 蓄势未涨，1–5 个交易日
+       M 中线：赚趋势初段的钱——位置在启动区 + 前瞻确认，10–30 个交易日
+       L 长线：赚业绩与估值的钱——ROE/估值为主，前瞻只作辅助，60–180 日
+     权重 d1–d7 对应七维分数；vw 是「估值分」在合成里的固定占比。
      权重可被用户按档位单独调整，互不干扰。 */
   var HZ = {
     S: {
       key: 'S', label: '短线', short: '短',
       window: '1–5 个交易日',
       shortWin: '1–5 日',
-      desc: '赚情绪与资金的钱：主力当日进场、量能放大、行业有热度，快进快出。',
+      desc: '赚启动的钱：主力低位吸筹、量能温和放大、股价尚未透支，提前埋伏而非追涨。',
       discipline: '止损 −4.5% 左右，第一目标 +5.5%，破位就走，不隔夜恋战。',
-      w: { d1: 32, d2: 28, d3: 8, d4: 18, d5: 7, d6: 7 },
+      /* 前瞻 30 + 资金 18 + 位置 16 为主；追涨型的 d1/d2 合计从 60 降到 30 */
+      w: { d1: 18, d2: 12, d3: 16, d4: 12, d5: 6, d6: 6, d7: 30 },
       vw: 0,
       topN: 6,
       buyLow: 0.015, buyHigh: 0.005, stop: 0.045, t1: 0.055, t2: 0.09,
@@ -60,9 +65,9 @@
       key: 'M', label: '中线', short: '中',
       window: '10–30 个交易日（约 2–6 周）',
       shortWin: '10–30 日',
-      desc: '赚趋势与景气的钱：60 日位置在启动段、行业动能能延续、基本面不拖后腿。',
+      desc: '赚趋势初段的钱：60 日位置仍在启动区、前瞻信号确认、行业景气能延续。',
       discipline: '止损 −8% 左右，第一目标 +12%，按周看，不被日内波动洗出去。',
-      w: { d1: 14, d2: 10, d3: 28, d4: 20, d5: 12, d6: 16 },
+      w: { d1: 10, d2: 7, d3: 24, d4: 16, d5: 10, d6: 11, d7: 22 },
       vw: 0.16,
       topN: 4,
       buyLow: 0.03, buyHigh: 0.01, stop: 0.08, t1: 0.12, t2: 0.20,
@@ -72,9 +77,9 @@
       key: 'L', label: '长线', short: '长',
       window: '60–180 个交易日（约 3–9 个月）',
       shortWin: '60–180 日',
-      desc: '赚业绩与估值的钱：ROE 稳定、估值不贵、位置未透支，忽略短期波动。',
+      desc: '赚业绩与估值的钱：ROE 稳定、估值不贵、位置未透支，前瞻仅作辅助。',
       discipline: '止损 −15% 左右，第一目标 +25%，按季报验证，分批建仓。',
-      w: { d1: 6, d2: 4, d3: 18, d4: 6, d5: 10, d6: 56 },
+      w: { d1: 5, d2: 3, d3: 16, d4: 5, d5: 9, d6: 54, d7: 8 },
       vw: 0.38,
       topN: 3,
       buyLow: 0.05, buyHigh: 0.02, stop: 0.15, t1: 0.25, t2: 0.45,
@@ -84,9 +89,11 @@
   var HZ_ORDER = ['S', 'M', 'L'];
 
   /* 各档硬性门槛：同一只票在短线档合格，不代表能进长线名单 */
+  /* maxPct：当日涨幅上限。追涨改造的关键门槛——短线涨幅 >6% 的票
+     当日动能已兑现，次日追高期望为负，直接剔除而非靠打分微调。 */
   var HZ_RULE = {
-    S: { minAmt: 1.5e8, maxTurn: 25, minCap: 20e8, minList: 60, maxD60: 90, minPct: -5 },
-    M: { minAmt: 1.0e8, maxTurn: 15, minCap: 40e8, minList: 180, maxD60: 55, minPct: -7, minRoe: 2, maxPe: 150, needProfit: true },
+    S: { minAmt: 1.5e8, maxTurn: 12, minCap: 20e8, minList: 60, maxD60: 45, minD60: -25, minPct: -5, maxPct: 6 },
+    M: { minAmt: 1.0e8, maxTurn: 12, minCap: 40e8, minList: 180, maxD60: 45, minPct: -7, maxPct: 8, minRoe: 2, maxPe: 150, needProfit: true },
     L: { minAmt: 0.8e8, maxTurn: 12, minCap: 80e8, minList: 730, maxD60: 60, minD60: -40, minRoe: 8, maxPe: 60, minNp: -15, needProfit: true }
   };
 
@@ -128,9 +135,9 @@
     hz: 'S',                 // 当前查看的周期档：S 短线 | M 中线 | L 长线
     hzPicks: { S: [], M: [], L: [] },   // 三档各自的候选名单
     hzW: {
-      S: { d1: 32, d2: 28, d3: 8, d4: 18, d5: 7, d6: 7 },
-      M: { d1: 14, d2: 10, d3: 28, d4: 20, d5: 12, d6: 16 },
-      L: { d1: 6, d2: 4, d3: 18, d4: 6, d5: 10, d6: 56 }
+      S: { d1: 18, d2: 12, d3: 16, d4: 12, d5: 6, d6: 6, d7: 30 },
+      M: { d1: 10, d2: 7, d3: 24, d4: 16, d5: 10, d6: 11, d7: 22 },
+      L: { d1: 5, d2: 3, d3: 16, d4: 5, d5: 9, d6: 54, d7: 8 }
     },
     hzTopN: { S: 6, M: 4, L: 3 },
     hzTouched: { S: false, M: false, L: false },
@@ -572,18 +579,25 @@
     else if (ratio >= -3) s = 34;
     else s = 18;
     if (yi >= 3) s += 4; else if (yi >= 1) s += 2; else if (yi <= -3) s -= 6;
+    /* 拉高出货修正：资金流入但当日已大涨，多半是拉高派发，不是启动吸筹 */
+    if (ratio >= 1 && r.pct >= 6) s -= 20;
+    else if (ratio >= 1 && r.pct >= 4) s -= 10;
     return { v: clamp(Math.round(s), 0, 100), ratio: ratio, yi: yi };
   }
 
   function scorePrice(r) {
     var p = r.pct, t = r.turn, vr = r.volRatio;
+    /* 涨幅打分改为「面向未来」：温和上涨（0–3%）才是健康的启动态，
+       大涨（>5%）意味着当日动能已兑现，次日追高的期望收益为负。
+       2026-11-20 前这里给 3–7% 满分 92，是典型的追涨因子，已废止。 */
     var ps;
-    if (p >= 3 && p <= 7) ps = 92;
-    else if (p > 7) ps = 74;
-    else if (p >= 1.5) ps = 82;
-    else if (p >= 0) ps = 66;
-    else if (p >= -1.5) ps = 55;
-    else if (p >= -3) ps = 40;
+    if (p >= 0.5 && p <= 3) ps = 92;
+    else if (p > 3 && p <= 5) ps = 74;
+    else if (p >= 0 && p < 0.5) ps = 80;
+    else if (p > 5 && p <= 7) ps = 52;
+    else if (p >= -1.5 && p < 0) ps = 62;   // 小幅回调蓄势，不是坏事
+    else if (p > 7) ps = 30;                  // 已大涨，明日透支
+    else if (p >= -3 && p < -1.5) ps = 42;
     else ps = 25;
 
     /* 注意分支顺序：先判 t>10 的区间，否则会被 t>=2 全部吃掉（原先 15–25% 的降权是死代码） */
@@ -713,6 +727,88 @@
     return clamp(Math.round(s), 0, 100);
   }
 
+  /* ================= 前瞻信号 d7（2026-11-20 新增） =================
+     为什么需要它：原来的 d1 资金 + d2 量价都是「今天已经发生」的数据，
+     短线给到 60% 权重，等于每天买涨幅榜前列——那是追逐已兑现的动量，
+     次日往往高开低走。前瞻信号只问一件事：
+       「这只票现在是处在启动之前，还是已经涨完了？」
+     全市场快照没有逐日 K 线，无法直接算波动收缩（VCP），
+     但可以用以下几个当日可得的代理信号合成「启动概率」：
+
+       ① 吸筹潜伏 absorb：主力净流入占比为正、而涨幅温和甚至小跌
+          —— 资金在进但价格还没走，是最有价值的吸筹信号（低吸窗口）。
+          反之资金流出却大涨（拉高出货）给最低分。
+       ② 蓄势 coil：当日振幅小 + 换手温和 + 60 日位置不高
+          —— 抛压轻、筹码稳，上涨阻力小；振幅/换手过大说明分歧已起。
+       ③ 未透支 headroom：近 60 日涨幅低、年内涨幅不过分、收盘不在当日最高
+          —— 上方套牢盘少、想象空间大；已翻倍的票再涨需要更多资金。
+       ④ 行业轮动位 rotation：所处行业今日热度中等（不是最热）、但资金在流入
+          —— 还没被市场充分挖掘，比「今日涨幅第一的行业」更有延续性。
+
+     四个信号加权，输出 0–100。分数越高 = 越像「启动前夜」而非「上涨末端」。 */
+  function scoreForward(r) {
+    var ratio = r.amt > 0 ? r.net / r.amt * 100 : 0;   // 主力净额占成交额 %
+    var p = r.pct, amp = r.amp, turn = r.turn, d = r.d60, ytd = r.ytd;
+
+    /* ① 吸筹潜伏：资金进 + 价格没走 = 低吸窗口（核心信号，权重最高） */
+    var absorb;
+    if (ratio >= 3 && p >= -1.5 && p <= 2.5) absorb = 96;
+    else if (ratio >= 1.5 && p >= -2 && p <= 3) absorb = 86;
+    else if (ratio >= 0.5 && p >= -2 && p <= 3.5) absorb = 72;
+    else if (ratio >= 3 && p > 3.5 && p <= 6) absorb = 55;   // 边拉边买，次优
+    else if (ratio >= 0 && p > 6) absorb = 38;                // 拉高，警惕派发
+    else if (ratio < -1 && p > 3) absorb = 15;                // 资金流出却大涨 = 拉高出货
+    else if (ratio >= -1 && ratio < 0 && p <= 1) absorb = 48;
+    else absorb = 35;
+
+    /* ② 蓄势：振幅小 + 换手温和 + 位置低。振幅用 pct 兜底（腾讯源可能 amp=0） */
+    var a = amp > 0 ? amp : Math.max(Math.abs(p), 1);
+    var coil = 50;
+    if (a <= 3) coil += 22;
+    else if (a <= 5) coil += 12;
+    else if (a <= 8) coil += 2;
+    else if (a > 12) coil -= 18;
+    if (turn >= 1 && turn <= 5) coil += 16;
+    else if (turn > 5 && turn <= 8) coil += 6;
+    else if (turn > 10) coil -= 12;
+    else if (turn < 0.5) coil -= 8;                            // 无人问津也不是蓄势
+    if (d >= -15 && d <= 15) coil += 12;
+    else if (d > 15 && d <= 35) coil += 2;
+    else if (d > 50) coil -= 15;
+    coil = clamp(Math.round(coil), 0, 100);
+
+    /* ③ 未透支：60 日 / 年内涨幅越小，上方空间越大；收盘不在最高位更好 */
+    var head = 60;
+    if (d >= -20 && d <= 10) head += 20;
+    else if (d > 10 && d <= 25) head += 10;
+    else if (d > 25 && d <= 45) head -= 5;
+    else if (d > 45) head -= 22;
+    else if (d < -35) head -= 8;                               // 深跌可能有基本面问题
+    if (ytd > 120) head -= 18;
+    else if (ytd > 60) head -= 8;
+    var cp = r.high > r.low ? (r.price - r.low) / (r.high - r.low) : 0.5;
+    if (cp >= 0.9) head -= 10;                                 // 收在当日最高，追高价
+    head = clamp(Math.round(head), 0, 100);
+
+    /* ④ 行业轮动位：热度中等偏上、但还没到最热，才是「即将轮到」 */
+    var st = S.indStats && S.indStats.map[r.ind];
+    var rotation = 55;
+    if (st) {
+      /* pctl 是该行业今日涨幅在全部行业中的分位（0 最弱、1 最热） */
+      if (st.pctl >= 0.35 && st.pctl <= 0.7) rotation = 82;    // 温和走强，未过热
+      else if (st.pctl > 0.7 && st.pctl <= 0.88) rotation = 68;
+      else if (st.pctl > 0.88) rotation = 38;                  // 已是最热板块，拥挤
+      else if (st.pctl >= 0.15 && st.pctl < 0.35) rotation = 62;
+      else rotation = 42;                                      // 冷门，缺乏催化
+      if ((st.net || 0) > 0) rotation += 6;                    // 行业资金在进
+    }
+
+    return {
+      v: clamp(Math.round(0.40 * absorb + 0.28 * coil + 0.20 * head + 0.12 * rotation), 0, 100),
+      absorb: absorb, coil: coil, head: head, rotation: rotation
+    };
+  }
+
   function listedDays(r) {
     var s = String(r.listDate || '');
     if (s.length !== 8) return null;
@@ -743,6 +839,7 @@
     if (r.turn > g.maxTurn) return '换手 >' + g.maxTurn + '% 过热';
     if (r.cap < g.minCap) return '市值不足 ' + (g.minCap / 1e8) + ' 亿';
     if (g.minPct != null && r.pct <= g.minPct) return '当日破位（跌超 ' + (-g.minPct) + '%）';
+    if (g.maxPct != null && r.pct > g.maxPct) return '当日已涨 >' + g.maxPct + '%（追高透支）';
     if (g.maxD60 != null && r.d60 > g.maxD60) return '60 日涨幅 >' + g.maxD60 + '%（位置过高）';
     if (g.minD60 != null && r.d60 < g.minD60) return '60 日跌幅 >' + (-g.minD60) + '%（趋势未止）';
     /* 腾讯源没有 ROE / 净利 / 上市日期：这几个门槛一旦照常执行，
@@ -773,11 +870,13 @@
   function dimScores(r) {
     var f = scoreFund(r), p = scorePrice(r), pos = scorePosition(r), ind = scoreIndustry(r);
     var liq = scoreLiquidity(r), q = scoreQuality(r), val = scoreValue(r);
+    var fw = scoreForward(r);
     return {
-      scores: { d1: f.v, d2: p.v, d3: pos, d4: ind.v, d5: liq, d6: q },
+      scores: { d1: f.v, d2: p.v, d3: pos, d4: ind.v, d5: liq, d6: q, d7: fw.v },
       value: val,
       netRatio: f.ratio, closePos: p.pos,
-      indAvgPct: ind.avgPct, indRank: ind.rank, indCount: ind.n
+      indAvgPct: ind.avgPct, indRank: ind.rank, indCount: ind.n,
+      forward: fw
     };
   }
 
@@ -838,7 +937,7 @@
         d60: r.d60, ytd: r.ytd, net: r.net, netRatio: d.netRatio,
         high: r.high, low: r.low, open: r.open,
         closePos: d.closePos, indAvgPct: d.indAvgPct, indRank: d.indRank, indCount: d.indCount,
-        scores: d.scores, value: d.value,
+        scores: d.scores, value: d.value, forward: d.forward,
         hs: hs, okHz: okHz,
         total: okHz[active] ? hs[active] : 0
       };
@@ -911,6 +1010,19 @@
      短线看资金/量价，中线看趋势/景气，长线看质量/估值。 */
   function buildReasons(s, k) {
     var out = [];
+    /* 前瞻信号放在最前：短线/中线选它是因为「还没涨、将要启动」，
+       而不是「今天涨得好」。文案直接说明是哪一种前瞻形态。 */
+    if (s.forward) {
+      var fw = s.forward, shape;
+      if (fw.absorb >= 80) shape = '<b>资金低位吸筹</b>（净流入但股价未大涨），处于启动前夜';
+      else if (fw.coil >= 75) shape = '<b>蓄势充分</b>（振幅小、换手温和、位置不高），抛压轻';
+      else if (fw.head >= 75) shape = '<b>上方空间足</b>（60 日涨幅有限、未透支）';
+      else shape = '前瞻分 <b>' + fw.v + '</b>，吸筹 ' + fw.absorb + ' / 蓄势 ' + fw.coil + ' / 空间 ' + fw.head;
+      out.push({
+        w: k === 'S' ? s.scores.d7 * 1.4 : k === 'M' ? s.scores.d7 * 1.15 : s.scores.d7 * 0.6,
+        t: shape
+      });
+    }
     out.push({
       w: k === 'S' ? s.scores.d1 : k === 'M' ? s.scores.d1 * 0.7 : s.scores.d1 * 0.35,
       t: s.net >= 0
@@ -1578,7 +1690,8 @@
       S.mode = 'auto';
       S.hz = 'S';
       HZ_ORDER.forEach(function (h) {
-        S.hzW[h] = { d1: HZ[h].w.d1, d2: HZ[h].w.d2, d3: HZ[h].w.d3, d4: HZ[h].w.d4, d5: HZ[h].w.d5, d6: HZ[h].w.d6 };
+        S.hzW[h] = {};
+        DIM.forEach(function (d) { S.hzW[h][d.key] = HZ[h].w[d.key]; });
         S.hzTopN[h] = HZ[h].topN;
         S.hzTouched[h] = false;
       });
@@ -1619,7 +1732,11 @@
           code: s.code, name: s.name, ind: s.ind, price: s.price, pct: s.pct,
           total: s.hs[S.hz], value: s.value,
           d1: s.scores.d1, d2: s.scores.d2, d3: s.scores.d3,
-          d4: s.scores.d4, d5: s.scores.d5, d6: s.scores.d6,
+          d4: s.scores.d4, d5: s.scores.d5, d6: s.scores.d6, d7: s.scores.d7,
+          forward: s.forward ? {
+            absorb: s.forward.absorb, coil: s.forward.coil,
+            head: s.forward.head, rotation: s.forward.rotation
+          } : null,
           net: s.net, netRatio: s.netRatio, turn: s.turn, volRatio: s.volRatio,
           amt: s.amt, cap: s.cap, d60: s.d60, ytd: s.ytd, pe: s.pe, pb: s.pb,
           roe: s.roe, npYoY: s.npYoY, hz: S.hz

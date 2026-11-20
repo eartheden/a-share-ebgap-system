@@ -1166,7 +1166,14 @@
     paper: renderPaperWrap,
     stock: renderStock,
     history: renderHistory,
-    limitup: renderLimitUp
+    limitup: renderLimitUp,
+    admin: function () {
+      if (window.EB_AUTH && EB_AUTH.renderAdmin) EB_AUTH.renderAdmin();
+      else { var v = document.getElementById('v-admin'); if (v && !v.dataset.built) {
+        v.innerHTML = '<div class="vhead"><h1>会员管理</h1></div><p class="foot-note">会员脚本未加载。</p>';
+        v.dataset.built = '1';
+      } }
+    }
   };
   var DONE = {};
   function show(v) {

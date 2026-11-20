@@ -4,13 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>A股股债利差系统 · Equity Bond Gap Terminal</title>
-<link rel="stylesheet" href="style.css?v=23">
+<link rel="stylesheet" href="style.css?v=24">
 <link rel="stylesheet" href="limitup.css?v=1">
-<link rel="stylesheet" href="paper.css?v=3">
+<link rel="stylesheet" href="paper.css?v=5">
 <link rel="stylesheet" href="theme.css?v=10">
+<link rel="stylesheet" href="auth.css?v=2">
 <link rel="icon" href="data:,">
 </head>
 <body>
+
+<!-- 会员鉴权壳：未登录时覆盖全屏；由 auth.js 控制显隐 -->
+<div class="auth-gate" id="auth-gate" hidden></div>
 
 <aside class="side">
   <div class="brand">
@@ -27,7 +31,13 @@
     <button class="navi" data-v="stock"><i>07</i>个股分析</button>
     <button class="navi" data-v="history"><i>08</i>历史复盘</button>
     <button class="navi" data-v="limitup"><i>09</i>涨停地图</button>
+    <button class="navi navi-admin" data-v="admin" hidden><i>10</i>会员管理</button>
   </nav>
+  <div class="user-bar" id="user-bar" hidden>
+    <span class="user-avatar" id="user-avatar">—</span>
+    <div class="user-meta"><b id="user-name">—</b><span id="user-role">—</span></div>
+    <button class="user-logout" id="user-logout" title="退出登录">退出</button>
+  </div>
   <div class="side-foot">
     <div class="live-badge on-loading" id="sf-live">
       <i></i>
@@ -221,7 +231,7 @@
 <section class="view" id="v-pick">
   <div class="vhead">
     <h1>每日选股引擎</h1>
-    <p class="sub">每次进入都重新抓全市场实时数据：先判断今天是什么行情（进攻 / 均衡 / 防守），再从 5500+ 只 A 股里现算七维分数，按三种持有周期各给一份名单——短线赚情绪与资金（1–5 个交易日）、中线赚趋势与景气（10–30 个交易日）、长线赚业绩与估值（60–180 个交易日）。同一只票在三档里的分数和结论可以完全不同，每只都给出按波动与位置推出来的建议持有天数。</p>
+    <p class="sub">每次进入都重新抓全市场实时数据：先判断今天是什么行情（进攻 / 均衡 / 防守），再从 5500+ 只 A 股里现算七维分数，按三种持有周期各给一份名单——短线找「资金潜伏、蓄势待发」的启动前夜（1–5 个交易日，不追当日已大涨的票）、中线赚趋势初段的钱（10–30 个交易日）、长线赚业绩与估值的钱（60–180 个交易日）。同一只票在三档里的分数和结论可以完全不同，每只都给出按波动与位置推出来的建议持有天数。</p>
   </div>
 
   <div class="pk-toolbar">
@@ -285,9 +295,9 @@
     <div class="card-h"><h2>模型说明、局限与免责</h2></div>
     <div class="rules">
       <div class="rule"><b>01</b><p><b>候选池是全市场，不是固定几只。</b>每次刷新重新抓取沪深主板、创业板、科创板共 5500+ 只，剔除 ST/退市、新股次新、停牌、成交额不足 1.5 亿、换手过热、当日破位和已封涨停的标的。</p></div>
-      <div class="rule"><b>02</b><p><b>先判行情，再选股。</b>用涨跌家数、涨停跌停、指数表现、两市成交额合成「市场温度」，≥64 为进攻（重资金与量价）、42–64 为均衡、&lt;42 为防守（重资金与质量，只选 3 只）。所以每天推出来的名单会不一样。</p></div>
-      <div class="rule"><b>03</b><p><b>七维分数是算出来的。</b>资金动能看主力净额占成交额比重；量价强度看涨幅、换手、量比与收盘位置；位置空间看近 60 日与年内涨幅；行业动能看所属行业当日均值排名；流动性看成交额与市值；质量安全用 ROE、净利增速、PE 排雷；估值分用 PE/PB 的绝对水平与行业相对水平合成。三档各有一套权重（短线重资金与量价、中线重位置与行业、长线重质量与估值），权重可调，调完立即重算。</p></div>
-      <div class="rule"><b>04</b><p><b>三档不是同一份名单换个标签。</b>每档有各自的硬性门槛：短线要求成交额 ≥1.5 亿、不接已封涨停；中线剔除 60 日已涨超 55%、换手过热、ROE &lt;2% 或亏损的票；长线只保留上市满 2 年、市值 ≥80 亿、ROE ≥8%、PE ≤60 且 60 日未翻倍的标的。所以短线榜上的热门股很可能进不了长线榜，反之亦然。</p></div>
+      <div class="rule"><b>02</b><p><b>先判行情，再选股。</b>用涨跌家数、涨停跌停、指数表现、两市成交额合成「市场温度」，≥64 为进攻、42–64 为均衡、&lt;42 为防守；行情只调整仓位系数与短线候选数量（进攻 6 只 / 均衡 5 只 / 防守 3 只），不再覆盖三档权重——弱市里也不靠追涨凑数。所以每天推出来的名单会不一样。</p></div>
+      <div class="rule"><b>03</b><p><b>第七维「前瞻信号」是这次改造的核心。</b>前六维里，资金动能与量价强度都只反映「今天已经发生」的事——照它们选，等于每天买涨幅榜，是在追已兑现的动量。前瞻信号反过来问「现在是在启动前还是涨完了」：①吸筹潜伏＝主力净流入但股价没大涨（低吸窗口）；②蓄势＝振幅小、换手温和、位置不高（抛压轻）；③未透支＝60 日与年内涨幅有限（上方空间足）；④行业轮动位＝所属行业热度中等而非最热（还没被充分挖掘）。四项加权成分，短线给它最高 30% 权重，是名单的第一来源。</p></div>
+      <div class="rule"><b>04</b><p><b>三档不是同一份名单换个标签，门槛各自不同。</b>短线要求成交额 ≥1.5 亿、换手 ≤12%、60 日涨幅 ≤45%，并直接剔除当日涨幅 &gt;6% 的票（动能已兑现，追高期望为负）；中线剔除当日 &gt;8%、60 日 &gt;45%、ROE &lt;2% 或亏损的票；长线只保留上市满 2 年、市值 ≥80 亿、ROE ≥8%、PE ≤60 且 60 日未翻倍的标的。所以今天涨幅榜前列的股票，短线档反而不会选——这正是有意为之。</p></div>
       <div class="rule"><b>05</b><p><b>建议持有天数是推出来的，不是拍脑袋。</b>短线按「日均振幅 + 换手」估算走完第一目标要几个交易日（1–5 天）；中线按 60 日位置决定给 2–6 周还是压缩到 2–4 周；长线按 ROE 与估值给 3–9 个月。每张卡片下方都写明这只票的推算依据。止损与目标也按档位区分：短线约 −4.5%/+5.5%，中线 −8%/+12%，长线 −15%/+25%。</p></div>
       <div class="rule"><b>06</b><p><b>分数高不等于会涨。</b>模型只看可观测的量价资金与财务快照，无法预知隔夜消息、政策、外盘和大股东行为；涨停、闪崩、停牌都可能让任何信号失效。所有价位只是纪律参考，不是承诺。三档名单都只用于研究与自我训练，不构成投资建议。</p></div>
       <div class="rule"><b>06</b><p><b>数据与免责。</b>行情经本地服务中转：默认使用腾讯财经公开行情（页面右上角标明当前数据源），失败时自动切换东方财富接口。腾讯源覆盖沪深主板与创业板（不含科创板），行业维度按「主板/创业板」板块近似，当日最高最低价缺失时收盘位置按中性处理。记录写入本机 SQLite（ebgap.db），不经过任何第三方服务器。本页仅用于研究与自我训练，不构成投资建议，据此操作风险自负。</p></div>
@@ -392,18 +402,22 @@
 <!-- ============ 09 涨停地图 ============ -->
 <section class="view" id="v-limitup"></section>
 
+<!-- ============ 10 会员管理（仅管理员） ============ -->
+<section class="view" id="v-admin"></section>
+
 </main>
 
 <script src="echarts.min.js"></script>
+<script src="auth.js?v=2"></script>
 <script src="data.js?v=2"></script>
 <script src="stocks.js?v=4"></script>
 <script src="live.js?v=4"></script>
 <script src="stock.js?v=23"></script>
 <script src="fundamental.js?v=8"></script>
-<script src="picker.js?v=20"></script>
-<script src="paper.js?v=2"></script>
+<script src="picker.js?v=21"></script>
+<script src="paper.js?v=5"></script>
 <script src="ai.js?v=5"></script>
 <script src="limitup.js?v=2"></script>
-<script src="app.js?v=24"></script>
+<script src="app.js?v=26"></script>
 </body>
 </html>
