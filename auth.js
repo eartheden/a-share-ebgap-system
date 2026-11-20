@@ -261,6 +261,13 @@
     gate = $('auth-gate');
     userBar = $('user-bar');
     $('user-logout').addEventListener('click', logout);
+    /* 双保险：即便有人手改 hash 到 #admin，非管理员也立刻踢回总览，
+       不留一个「看得见入口却没内容」的空壳页。后端 403 仍是最终防线。 */
+    document.addEventListener('eb:view', function (e) {
+      if (e.detail && e.detail.view === 'admin' && (!me || me.role !== 'admin')) {
+        if (window.EB_APP && EB_APP.show) EB_APP.show('overview');
+      }
+    });
     api('/api/auth/me').then(function (res) {
       if (res.ok && res.user) {
         me = res.user;

@@ -177,6 +177,10 @@ body.auth-locked { overflow: hidden; }
 }
 .adm-empty { padding: 40px; text-align: center; color: var(--ink4, #5f6f8d); font-size: 12px; }
 
+/* 关键：.navi 的 display:inline-flex 会覆盖 UA 的 [hidden]{display:none}，
+   只设 hidden 属性普通会员仍能看到「会员管理」入口。必须显式兜回。 */
+.navi-admin[hidden] { display: none !important; }
+
 @media (max-width: 860px) {
   .adm-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .adm-table-wrap { overflow-x: auto; }
