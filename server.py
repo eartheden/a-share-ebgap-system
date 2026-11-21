@@ -419,8 +419,13 @@ class Handler(SimpleHTTPRequestHandler):
             finally:
                 conn.close()
         # 静态资源本身放行（登录页要能加载 HTML/JS/CSS）
-        p = self.path.split('?')[0]
-        if p.endswith('.py') or '/.' in p or p.endswith('.db'):
+        # 注意：数据库备份文件名形如 ebgap.db.bak_xxx，只判断 .db 结尾会漏掉，
+        # 实测公网可直接下载到含密码哈希和会话 token 的整库备份。这里统一封死
+        # 数据库、备份、隐藏目录和源码。先 unquote，避免 %2e 之类绕过。
+        p = urllib.parse.unquote(self.path.split('?')[0]).lower()
+        if (p.endswith('.py') or p.endswith('.pyc') or p.endswith('.sql') or
+            p.startswith('.') or '/.' in p or
+            '.db' in p or '.bak' in p or '/backup' in p or p.endswith('~')):
             return self._json({'ok': False, 'error': 'not found'}, 404)
         return super().do_GET()
 

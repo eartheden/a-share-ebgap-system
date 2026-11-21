@@ -203,6 +203,7 @@
   var admQuery = '';
 
   var admTab = 'users';
+  var admTimer = null;
 
   function renderAdmin() {
     var host = $('v-admin');
@@ -237,12 +238,23 @@
       '<div class="adm-kpis" id="adm-kpis"><div class="adm-kpi"><i>加载中</i><b>—</b></div></div>' +
       '<div class="adm-tools">' +
       '<input class="adm-search" id="adm-q" placeholder="搜索用户名">' +
+      '<button class="adm-btn" id="adm-refresh">刷新列表</button>' +
       '<button class="adm-btn main" id="adm-create">+ 新建会员</button>' +
       '</div>' +
       '<div class="adm-table-wrap" id="adm-table"><div class="adm-empty">加载中…</div></div>';
     $('adm-q').addEventListener('input', function () { admQuery = this.value.trim().toLowerCase(); renderAdminTable(); });
+    $('adm-refresh').addEventListener('click', function () { loadAdminData(); });
     $('adm-create').addEventListener('click', function () { adminCreate(); });
     loadAdminData();
+    /* 有人用另一个标签页/设备注册或改了会员时，当前页不该一直停在旧列表。
+       只在会员管理页可见时刷新，角色页和后台页面都不打扰。 */
+    if (!admTimer) {
+      admTimer = setInterval(function () {
+        var host = $('v-admin');
+        if (!host || !host.classList.contains('on') || !me || admTab !== 'users') return;
+        loadAdminData();
+      }, 12000);
+    }
   }
 
   /* 角色与权限：从数据库读取角色、权限点，勾选后覆盖式授权 */
@@ -361,9 +373,24 @@
         kpi('管理员', s.admins) + kpi('全站持仓', s.trades);
     });
     api('/api/admin/users').then(function (res) {
-      if (!res.ok) return;
+      if (!res.ok) {
+        /* 以前这里直接 return：接口偶发失败时表格会一直停在上次的旧名单，
+           统计数字却更新了，看起来就像「会员总数 2 但只看到 1 个」。 */
+        var box = $('adm-table');
+        if (box) box.innerHTML = '<div class="adm-empty">会员列表加载失败：' +
+          esc(res.error || '请稍后重试') + ' <button class="adm-btn" id="adm-retry">重试</button></div>';
+        var rt = $('adm-retry');
+        if (rt) rt.addEventListener('click', function () { loadAdminData(); });
+        return;
+      }
       window.__admUsers = res.users || [];
       renderAdminTable();
+    }).catch(function (e) {
+      var box = $('adm-table');
+      if (box) box.innerHTML = '<div class="adm-empty">会员列表加载失败：' +
+        esc(e && e.message ? e.message : '网络异常') + ' <button class="adm-btn" id="adm-retry">重试</button></div>';
+      var rt = $('adm-retry');
+      if (rt) rt.addEventListener('click', function () { loadAdminData(); });
     });
     function kpi(l, v) { return '<div class="adm-kpi"><i>' + l + '</i><b>' + v + '</b></div>'; }
   }
