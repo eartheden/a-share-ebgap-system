@@ -87,23 +87,31 @@ body.auth-locked { overflow: hidden; }
 
 /* ---------- 侧栏用户卡 ---------- */
 .user-bar {
-  display: flex; align-items: center; gap: 9px;
+  display: flex; align-items: center; gap: 9px; flex: none;
   margin: 0 12px 12px; padding: 10px 11px; border-radius: 10px;
   background: var(--side2, #0d1524); border: 1px solid var(--line, #1d2a41);
 }
 .user-bar[hidden] { display: none; }
+/* 顶栏是 .side 的三列网格，第三列写死 165px 时用户卡装不下「头像+用户名+角色+退出」，
+   角色会被压成省略号。这里改成按内容自适应，让导航区（flex:1 可滚动）让出空间。 */
+@media (min-width: 900px) {
+  .side { grid-template-columns: 178px minmax(0, 1fr) minmax(165px, max-content); }
+}
 .user-avatar {
   flex: none; width: 32px; height: 32px; border-radius: 9px;
   display: flex; align-items: center; justify-content: center;
   background: linear-gradient(135deg, #38bdf8, #818cf8);
   color: #061020; font-weight: 800; font-size: 14px; text-transform: uppercase;
 }
-.user-meta { flex: 1; min-width: 0; }
+.user-meta { flex: 1; min-width: 46px; }
 .user-meta b {
   display: block; font-size: 12.5px; color: var(--ink, #e8edf7);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.user-meta span { font-size: 10px; color: var(--ink3, #8493af); }
+.user-meta span {
+  display: block; font-size: 10px; color: var(--ink3, #8493af);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .user-logout {
   flex: none; padding: 5px 8px; border-radius: 6px; cursor: pointer;
   background: transparent; border: 1px solid var(--line, #1d2a41);
@@ -178,12 +186,56 @@ body.auth-locked { overflow: hidden; }
 .adm-empty { padding: 40px; text-align: center; color: var(--ink4, #5f6f8d); font-size: 12px; }
 
 /* 关键：.navi 的 display:inline-flex 会覆盖 UA 的 [hidden]{display:none}，
-   只设 hidden 属性普通会员仍能看到「会员管理」入口。必须显式兜回。 */
-.navi-admin[hidden] { display: none !important; }
+   只设 hidden 属性仍会显示。RBAC 下任意导航项都可能被收回权限，
+   所以这里必须用通用规则兜回，而不是只针对「会员管理」一项。 */
+.navi[hidden] { display: none !important; }
 
 @media (max-width: 860px) {
   .adm-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .adm-table-wrap { overflow-x: auto; }
   .adm-table { min-width: 680px; }
   .auth-card { padding: 24px 20px; }
+}
+
+/* ---------- RBAC 角色权限界面 ---------- */
+.adm-tabs {
+  display: flex; gap: 6px; margin: 14px 0 18px;
+  border-bottom: 1px solid var(--line, #1d2a41);
+}
+.adm-tabs button {
+  padding: 9px 16px; border: 0; background: transparent; cursor: pointer;
+  color: var(--ink3, #8493af); font-size: 12.5px; font-weight: 600;
+  border-bottom: 2px solid transparent; transition: .15s;
+}
+.adm-tabs button:hover { color: var(--ink, #e8edf7); }
+.adm-tabs button.on { color: #7dd3fc; border-bottom-color: #38bdf8; }
+
+.adm-role-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px;
+}
+.adm-role-card {
+  background: var(--card, #101827); border: 1px solid var(--line, #1d2a41);
+  border-radius: 12px; padding: 16px;
+}
+.adm-role-h {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line2, #162136);
+}
+.adm-role-h b { display: block; font-size: 14px; color: var(--ink, #e8edf7); }
+.adm-role-h span.mono { font-size: 10.5px; }
+.adm-role-perms { display: flex; flex-direction: column; gap: 12px; }
+.adm-perm-mod b {
+  display: block; font-size: 10.5px; color: var(--acc, #38bdf8);
+  letter-spacing: .5px; margin-bottom: 6px;
+}
+.adm-perm {
+  display: flex; align-items: center; gap: 8px; padding: 4px 0;
+  font-size: 11.5px; color: var(--ink2, #b6c2d9); cursor: pointer;
+}
+.adm-perm input { accent-color: #38bdf8; cursor: pointer; }
+.adm-perm span { flex: 1; }
+.adm-perm em { font-style: normal; font-family: var(--mono); font-size: 9.5px; color: var(--ink4, #5f6f8d); }
+.adm-role-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line2, #162136);
 }

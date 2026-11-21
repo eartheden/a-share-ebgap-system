@@ -366,6 +366,36 @@ class Handler(SimpleHTTPRequestHandler):
     def _need_auth(self):
         return self._json({'ok': False, 'error': '请先登录', 'unauthorized': True}, 401)
 
+    def _forbidden(self, perm):
+        return self._json({'ok': False, 'error': '没有权限：%s' % perm,
+                           'forbidden': True, 'perm': perm}, 403)
+
+    @staticmethod
+    def _perm_for_path(path):
+        """路径 → 所需权限点。集中映射，新增接口时只需在这里登记。"""
+        if path.startswith('/api/admin/roles') or path.startswith('/api/admin/role'):
+            return 'api.admin.roles'
+        if path.startswith('/api/admin/'):
+            return 'api.admin.users'
+        if path.startswith('/api/market/'):
+            return 'api.market'
+        if path.startswith('/api/stock/'):
+            return 'api.stock'
+        if path.startswith('/api/paper/'):
+            return 'api.paper'
+        if path.startswith('/api/advice/'):
+            return 'api.advice'
+        if path.startswith('/api/ai/'):
+            return 'api.ai'
+        return None
+
+    def _check_perm(self, conn, user):
+        """统一 RBAC 校验：查角色的权限集合，失败返回 403 响应，成功返回 None。"""
+        perm = self._perm_for_path(self.path)
+        if perm and not auth.has_permission(conn, user, perm):
+            return self._forbidden(perm)
+        return None
+
     def _bytes(self, body, code=200):
         self._cache_set = True
         self.send_response(code)
@@ -399,12 +429,21 @@ class Handler(SimpleHTTPRequestHandler):
         conn, user = self._session()
         try:
             if self.path.startswith('/api/auth/me'):
-                return self._json({'ok': True, 'user': auth.row_public(user) if user else None})
+                if not user:
+                    return self._json({'ok': True, 'user': None, 'permissions': []})
+                u = auth.row_public(user)
+                return self._json({
+                    'ok': True, 'user': u,
+                    'permissions': sorted(auth.permissions_of(conn, user['role'])),
+                })
             return self._json({'ok': False, 'error': 'unknown auth endpoint'}, 404)
         finally:
             conn.close()
 
     def _authed_get(self, conn, user):
+        denied = self._check_perm(conn, user)
+        if denied:
+            return denied
         uid = user['id']
         if self.path.startswith('/api/ai/status'):
             return self._json(status_payload(uid, conn))
@@ -476,7 +515,8 @@ class Handler(SimpleHTTPRequestHandler):
                                              bool(first_admin and first_admin['id'] == u['id']))
                 conn.commit()
                 return self._json_with_cookie(
-                    {'ok': True, 'user': u, 'legacy_migrated': migrated}, token)
+                    {'ok': True, 'user': u, 'legacy_migrated': migrated,
+                     'permissions': sorted(auth.permissions_of(conn, u['role']))}, token)
             if self.path.startswith('/api/auth/logout'):
                 auth.logout(conn, self._token())
                 conn.commit()
@@ -486,6 +526,9 @@ class Handler(SimpleHTTPRequestHandler):
             conn.close()
 
     def _authed_post(self, conn, user):
+        denied = self._check_perm(conn, user)
+        if denied:
+            return denied
         uid = user['id']
         if self.path.startswith('/api/ai/config'):
             data = self._read_json()
@@ -530,16 +573,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self._admin_post(conn, user)
         return self._json({'ok': False, 'error': 'unknown endpoint'}, 404)
 
-    # ---------- 管理员接口（仅 admin） ----------
-    def _require_admin(self, user):
-        if user['role'] != 'admin':
-            return self._json({'ok': False, 'error': '需要管理员权限'}, 403)
-        return None
-
+    # ---------- 管理员接口（按 RBAC 权限点校验，见 _check_perm） ----------
     def _admin_get(self, conn, user):
-        denied = self._require_admin(user)
-        if denied:
-            return denied
+        # 权限已由 _check_perm 按 api.admin.* 权限点统一校验，不再硬编码 role=='admin'
+        if self.path.startswith('/api/admin/roles') or self.path.startswith('/api/admin/permissions'):
+            return self._json({'ok': True,
+                               'roles': auth.all_roles(conn),
+                               'permissions': auth.all_permissions(conn)})
         if self.path.startswith('/api/admin/users'):
             rows = conn.execute('''
                 SELECT u.*,
@@ -564,11 +604,51 @@ class Handler(SimpleHTTPRequestHandler):
                 'users': total, 'active': active, 'admins': admins, 'trades': trades}})
         return self._json({'ok': False, 'error': 'unknown admin endpoint'}, 404)
 
+    def _role_admin(self, conn, user, data):
+        """角色与授权管理（需 api.admin.roles 权限）。"""
+        p = self.path
+        try:
+            if p.startswith('/api/admin/role/create'):
+                r = auth.create_role(conn, data.get('code'), data.get('name'), data.get('description'))
+                conn.commit()
+                return self._json({'ok': True, 'role': r})
+            if p.startswith('/api/admin/role/delete'):
+                auth.delete_role(conn, data.get('code'))
+                conn.commit()
+                return self._json({'ok': True})
+            if p.startswith('/api/admin/role/perms'):
+                perms = auth.set_role_permissions(conn, data.get('role'), data.get('permissions'))
+                conn.commit()
+                return self._json({'ok': True, 'permissions': perms})
+            if p.startswith('/api/admin/role/assign'):
+                # 改派会员角色：不能把自己降成没有管理权限的角色而锁死系统
+                uid = data.get('id')
+                code = data.get('role')
+                if not conn.execute('SELECT 1 FROM roles WHERE code=?', (code,)).fetchone():
+                    return self._json({'ok': False, 'error': '角色不存在'}, 400)
+                if uid == user['id'] and code != user['role']:
+                    # 允许，但要确保系统仍有人能管角色：检查改后该角色或其他管理员是否还有权限
+                    others = conn.execute(
+                        "SELECT COUNT(*) FROM users WHERE id<>? AND role IN "
+                        "(SELECT role_code FROM role_permissions WHERE perm_code='api.admin.roles')",
+                        (uid,)).fetchone()[0]
+                    if not others:
+                        return self._json({'ok': False, 'error': '至少保留一名能管理角色的管理员'}, 400)
+                conn.execute('UPDATE users SET role=? WHERE id=?', (code, uid))
+                conn.commit()
+                return self._json({'ok': True})
+            return self._json({'ok': False, 'error': 'unknown role endpoint'}, 404)
+        except ValueError as e:
+            return self._json({'ok': False, 'error': str(e)}, 400)
+
     def _admin_post(self, conn, user):
-        denied = self._require_admin(user)
-        if denied:
-            return denied
+        # 角色权限管理：需要 api.admin.roles 权限点
+        perm = self._perm_for_path(self.path)
+        if perm and not auth.has_permission(conn, user, perm):
+            return self._forbidden(perm)
         data = self._read_json()
+        if self.path.startswith('/api/admin/role/'):
+            return self._role_admin(conn, user, data)
         target = data.get('id')
         # create 不需要目标 id；其余 user/* 操作必须带有效 id
         is_create = self.path.startswith('/api/admin/user/create')
@@ -581,9 +661,9 @@ class Handler(SimpleHTTPRequestHandler):
             if row['id'] == user['id']:
                 return self._json({'ok': False, 'error': '不能停用自己'}, 400)
             want = 1 if data.get('active') else 0
-            if row['role'] == 'admin' and want == 0:
-                cnt = conn.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND active=1").fetchone()[0]
-                if cnt <= 1:
+            if want == 0 and auth.has_permission(conn, row, 'api.admin.users'):
+                # 按权限点判断：不能停用到系统没有任何人能管理会员
+                if auth.count_users_with_permission(conn, 'api.admin.users', exclude_id=target) <= 0:
                     return self._json({'ok': False, 'error': '至少保留一名启用的管理员'}, 400)
             conn.execute('UPDATE users SET active=? WHERE id=?', (want, target))
             if want == 0:
@@ -595,10 +675,15 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.startswith('/api/admin/user/role'):
             if row['id'] == user['id']:
                 return self._json({'ok': False, 'error': '不能改自己的角色'}, 400)
-            want = 'admin' if data.get('role') == 'admin' else 'member'
-            if row['role'] == 'admin' and want == 'member':
-                cnt = conn.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND active=1").fetchone()[0]
-                if cnt <= 1:
+            want = str(data.get('role') or 'member')
+            if not conn.execute('SELECT 1 FROM roles WHERE code=?', (want,)).fetchone():
+                return self._json({'ok': False, 'error': '角色不存在'}, 400)
+            # 改派前先看：目标当前是否拥有管理权限，改后系统是否还有人能管理
+            if auth.has_permission(conn, row, 'api.admin.users'):
+                new_role = conn.execute('SELECT * FROM roles WHERE code=?', (want,)).fetchone()
+                fake = dict(row); fake['role'] = want
+                if (not auth.has_permission(conn, fake, 'api.admin.users') and
+                        auth.count_users_with_permission(conn, 'api.admin.users', exclude_id=target) <= 0):
                     return self._json({'ok': False, 'error': '至少保留一名管理员'}, 400)
             conn.execute('UPDATE users SET role=? WHERE id=?', (want, target))
             conn.commit()
@@ -627,11 +712,14 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({'ok': True})
 
         if self.path.startswith('/api/admin/user/create'):
-            # 管理员直接建号（无需对方自行注册）
+            # 管理员直接建号（无需对方自行注册）；角色必须存在于 roles 表
+            want = str(data.get('role') or 'member')
+            if not conn.execute('SELECT 1 FROM roles WHERE code=?', (want,)).fetchone():
+                return self._json({'ok': False, 'error': '角色不存在'}, 400)
             u = auth.register(conn, data.get('username'), data.get('password'))
-            if data.get('role') == 'admin':
-                conn.execute("UPDATE users SET role='admin' WHERE id=?", (u['id'],))
-                u['role'] = 'admin'
+            if want != u['role']:
+                conn.execute('UPDATE users SET role=? WHERE id=?', (want, u['id']))
+                u['role'] = want
             conn.commit()
             return self._json({'ok': True, 'user': u})
 

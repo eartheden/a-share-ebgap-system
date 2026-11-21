@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="limitup.css?v=1">
 <link rel="stylesheet" href="paper.css?v=5">
 <link rel="stylesheet" href="theme.css?v=10">
-<link rel="stylesheet" href="auth.css?v=3">
+<link rel="stylesheet" href="auth.css?v=7">
 <link rel="icon" href="data:,">
 </head>
 <body>
@@ -22,16 +22,16 @@
     <div class="brand-s">EQUITY · BOND · GAP</div>
   </div>
   <nav id="nav">
-    <button class="navi on" data-v="overview"><i>01</i>总览面板</button>
-    <button class="navi" data-v="curve"><i>02</i>利差曲线</button>
-    <button class="navi" data-v="signal"><i>03</i>建仓提示</button>
-    <button class="navi" data-v="alloc"><i>04</i>配置建议</button>
-    <button class="navi" data-v="pick"><i>05</i>选股引擎</button>
-    <button class="navi" data-v="paper"><i>06</i>虚拟持仓</button>
-    <button class="navi" data-v="stock"><i>07</i>个股分析</button>
-    <button class="navi" data-v="history"><i>08</i>历史复盘</button>
-    <button class="navi" data-v="limitup"><i>09</i>涨停地图</button>
-    <button class="navi navi-admin" data-v="admin" hidden><i>10</i>会员管理</button>
+    <button class="navi on" data-v="overview" data-perm="view.overview"><i>01</i>总览面板</button>
+    <button class="navi" data-v="curve" data-perm="view.curve"><i>02</i>利差曲线</button>
+    <button class="navi" data-v="signal" data-perm="view.signal"><i>03</i>建仓提示</button>
+    <button class="navi" data-v="alloc" data-perm="view.alloc"><i>04</i>配置建议</button>
+    <button class="navi" data-v="pick" data-perm="view.pick"><i>05</i>选股引擎</button>
+    <button class="navi" data-v="paper" data-perm="view.paper"><i>06</i>虚拟持仓</button>
+    <button class="navi" data-v="stock" data-perm="view.stock"><i>07</i>个股分析</button>
+    <button class="navi" data-v="history" data-perm="view.history"><i>08</i>历史复盘</button>
+    <button class="navi" data-v="limitup" data-perm="view.limitup"><i>09</i>涨停地图</button>
+    <button class="navi navi-admin" data-v="admin" data-perm="view.admin" hidden><i>10</i>会员管理</button>
   </nav>
   <div class="user-bar" id="user-bar" hidden>
     <span class="user-avatar" id="user-avatar">—</span>
@@ -408,7 +408,7 @@
 </main>
 
 <script src="echarts.min.js"></script>
-<script src="auth.js?v=3"></script>
+<script src="auth.js?v=7"></script>
 <script src="data.js?v=2"></script>
 <script src="stocks.js?v=4"></script>
 <script src="live.js?v=4"></script>

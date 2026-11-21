@@ -8,7 +8,8 @@
 (function () {
   'use strict';
 
-  var me = null;          // 当前用户 {id, username, role, active}
+  var me = null;             // 当前用户 {id, username, role, active}
+  var myPerms = [];          // 当前用户的权限码集合（来自数据库 role_permissions）
   var gate, userBar;
 
   function $(id) { return document.getElementById(id); }
@@ -40,14 +41,27 @@
     return _fetch(path, opt).then(function (r) { return r.json(); });
   }
 
+  /* ---------- RBAC：按权限码判断，不再看 role 字符串 ---------- */
+  function has(perm) { return myPerms.indexOf(perm) >= 0; }
+
+  /* 按 data-perm 显隐所有导航项：菜单由数据库授权决定，前端不硬编码角色 */
+  function applyNav() {
+    document.querySelectorAll('#nav .navi').forEach(function (b) {
+      var p = b.dataset.perm;
+      var ok = !p || has(p);
+      b.hidden = !ok;          // CSS 有 .navi[hidden]{display:none!important} 兜底
+      if (!ok && b.classList.contains('on')) b.classList.remove('on');
+    });
+  }
+
   /* ---------- 登录门 ---------- */
   function showGate(msg) {
     me = null;
+    myPerms = [];
     gate.hidden = false;
     document.body.classList.add('auth-locked');
     if (userBar) userBar.hidden = true;
-    var navAdmin = document.querySelector('.navi-admin');
-    if (navAdmin) navAdmin.hidden = true;
+    applyNav();
     renderGate(msg);
   }
 
@@ -111,6 +125,7 @@
       .then(function (res) {
         if (!res.ok) throw new Error(res.error || '登录失败');
         me = res.user;
+        myPerms = res.permissions || [];
         gate.hidden = true;
         document.body.classList.remove('auth-locked');
         applyUser();
@@ -125,18 +140,31 @@
 
   /* ---------- 注入用户态 ---------- */
   function applyUser() {
-    if (!userBar) return;
-    userBar.hidden = false;
-    $('user-name').textContent = me.username;
-    $('user-role').textContent = me.role === 'admin' ? '管理员' : '会员';
-    $('user-avatar').textContent = (me.username || '?').slice(0, 1);
-    var navAdmin = document.querySelector('.navi-admin');
-    if (navAdmin) navAdmin.hidden = me.role !== 'admin';
+    if (userBar) {
+      userBar.hidden = false;
+      $('user-name').textContent = me.username;
+      // 角色名只作展示；能不能看到某模块完全由 applyNav() 按权限决定
+      $('user-role').textContent = me.role === 'admin' ? '管理员' : '会员';
+      $('user-avatar').textContent = (me.username || '?').slice(0, 1);
+    }
+    applyNav();
+    ensureViewPermitted();
+  }
+
+  /* 登录后当前停留的视图可能没授权（HTML 默认停在总览），
+     按权限把用户送到第一个可访问的页面，避免落在空白页。 */
+  function ensureViewPermitted() {
+    var cur = document.querySelector('.view.on');
+    var curName = cur && cur.id.indexOf('v-') === 0 ? cur.id.slice(2) : '';
+    if (curName && (curName === 'admin' ? has('view.admin') : has('view.' + curName))) return;
+    var first = document.querySelector('#nav .navi:not([hidden])');
+    if (first && first.dataset.v && window.EB_APP && EB_APP.show) EB_APP.show(first.dataset.v);
   }
 
   function logout() {
     api('/api/auth/logout', {}).then(function () {
       me = null;
+      myPerms = [];
       if (window.EB_APP && EB_APP.show) EB_APP.show('overview');
       showGate('已退出登录');
     });
@@ -145,27 +173,153 @@
   /* ---------- 会员管理视图（由 app.js 的 RENDER.admin 调用） ---------- */
   var admQuery = '';
 
+  var admTab = 'users';
+
   function renderAdmin() {
     var host = $('v-admin');
     if (!host) return;
-    if (!me || me.role !== 'admin') {
+    if (!has('view.admin')) {
       host.innerHTML = '<div class="vhead"><h1>会员管理</h1></div>' +
-        '<p class="foot-note">只有管理员可以查看此模块。</p>';
+        '<p class="foot-note">你当前的角色没有访问此模块的权限。</p>';
       return;
     }
+    var canRoles = has('api.admin.roles');
     host.innerHTML =
-      '<div class="vhead"><h1>会员管理</h1><span class="admin-tag">仅管理员可见</span></div>' +
-      '<p class="sub">查看与管理系统会员。第一个注册的账号自动成为管理员；至少保留一名启用管理员。</p>' +
+      '<div class="vhead"><h1>会员与权限</h1><span class="admin-tag">RBAC 权限控制</span></div>' +
+      '<p class="sub">角色与权限点存在数据库中，菜单和数据接口都按权限码校验；改授权即时生效（对方重新登录后）。</p>' +
+      '<div class="adm-tabs">' +
+      '<button data-tab="users" class="' + (admTab === 'users' ? 'on' : '') + '">会员管理</button>' +
+      (canRoles ? '<button data-tab="roles" class="' + (admTab === 'roles' ? 'on' : '') + '">角色与权限</button>' : '') +
+      '</div>' +
+      '<div id="adm-body"></div>';
+
+    host.querySelectorAll('.adm-tabs button').forEach(function (b) {
+      b.addEventListener('click', function () { admTab = b.dataset.tab; renderAdmin(); });
+    });
+
+    if (admTab === 'roles' && canRoles) renderRoles();
+    else renderUsersPanel();
+  }
+
+  function renderUsersPanel() {
+    var body = $('adm-body');
+    if (!body) return;
+    body.innerHTML =
       '<div class="adm-kpis" id="adm-kpis"><div class="adm-kpi"><i>加载中</i><b>—</b></div></div>' +
       '<div class="adm-tools">' +
       '<input class="adm-search" id="adm-q" placeholder="搜索用户名">' +
       '<button class="adm-btn main" id="adm-create">+ 新建会员</button>' +
       '</div>' +
       '<div class="adm-table-wrap" id="adm-table"><div class="adm-empty">加载中…</div></div>';
-
     $('adm-q').addEventListener('input', function () { admQuery = this.value.trim().toLowerCase(); renderAdminTable(); });
     $('adm-create').addEventListener('click', function () { adminCreate(); });
     loadAdminData();
+  }
+
+  /* 角色与权限：从数据库读取角色、权限点，勾选后覆盖式授权 */
+  function renderRoles() {
+    var body = $('adm-body');
+    if (!body) return;
+    body.innerHTML = '<div class="adm-empty">正在加载角色与权限…</div>';
+    Promise.all([
+      api('/api/admin/roles'),
+      api('/api/admin/users')
+    ]).then(function (rs) {
+      var roles = (rs[0] && rs[0].roles) || [];
+      var perms = (rs[0] && rs[0].permissions) || [];
+      var users = (rs[1] && rs[1].users) || [];
+      window.__admRoles = roles;
+      var mods = {};
+      /* 分组按「页面导航 → 业务接口 → 管理接口」排列，组内沿用后端返回的
+         声明顺序（与导航/接口顺序一致），比按权限码字母序更好读。 */
+      var MOD_ORDER = ['view', 'api', 'admin'];
+      var byMod = {};
+      perms.forEach(function (p) { (byMod[p.module] = byMod[p.module] || []).push(p); });
+      MOD_ORDER.concat(Object.keys(byMod).filter(function (m) { return MOD_ORDER.indexOf(m) < 0; }))
+        .forEach(function (m) { if (byMod[m]) mods[m] = byMod[m]; });
+      var modName = { view: '页面导航', api: '业务接口', admin: '管理接口' };
+
+      body.innerHTML =
+        '<div class="adm-role-grid">' +
+        roles.map(function (r) {
+          var boxes = Object.keys(mods).map(function (m) {
+            return '<div class="adm-perm-mod"><b>' + (modName[m] || m) + '</b>' +
+              mods[m].map(function (p) {
+                /* admin 角色必须保留会员与角色管理权限，后端会强制补齐，这里锁死勾选避免误导 */
+                var locked = (r.code === 'admin' &&
+                  (p.code === 'api.admin.users' || p.code === 'api.admin.roles' || p.code === 'view.admin'));
+                var on = locked || r.permissions.indexOf(p.code) >= 0;
+                return '<label class="adm-perm' + (locked ? ' locked' : '') + '">' +
+                  '<input type="checkbox" data-perm="' + p.code +
+                  '" data-role="' + r.code + '"' + (on ? ' checked' : '') +
+                  (locked ? ' disabled' : '') + '>' +
+                  '<span>' + esc(p.name) + '</span><em>' + p.code + '</em></label>';
+              }).join('') + '</div>';
+          }).join('');
+          return '<div class="adm-role-card" data-role="' + r.code + '">' +
+            '<div class="adm-role-h"><div><b>' + esc(r.name) + '</b>' +
+            '<span class="mono">' + r.code + ' · ' + r.users + ' 名会员</span></div>' +
+            (r.builtin ? '<span class="adm-badge admin">内置</span>' :
+              '<button class="adm-btn danger" data-delrole="' + r.code + '">删除</button>') +
+            '</div>' +
+            '<div class="adm-role-perms">' + boxes + '</div>' +
+            '<div class="adm-role-foot"><button class="adm-btn main" data-saveperms="' + r.code + '">保存授权</button>' +
+            '<span class="mono">' + r.permissions.length + ' / ' + perms.length + ' 项权限</span></div>' +
+            '</div>';
+        }).join('') + '</div>' +
+        '<div class="adm-tools" style="margin-top:18px">' +
+        '<input id="adm-newrole-code" placeholder="新角色代码，如 analyst">' +
+        '<input id="adm-newrole-name" placeholder="角色名称，如 分析师">' +
+        '<button class="adm-btn main" id="adm-addrole">+ 新建角色</button>' +
+        '<span class="mono">会员改派角色：回到「会员管理」标签，用「角色」按钮切换</span>' +
+        '</div>' +
+        '<div class="adm-tools" id="adm-assign-box">' +
+        '<select id="adm-assign-user">' + users.map(function (u) {
+          return '<option value="' + u.id + '">' + esc(u.username) + '（' + esc(u.role) + '）</option>';
+        }).join('') + '</select>' +
+        '<select id="adm-assign-role">' + roles.map(function (r) {
+          return '<option value="' + r.code + '">' + esc(r.name) + '</option>';
+        }).join('') + '</select>' +
+        '<button class="adm-btn" id="adm-assign-go">改派角色</button>' +
+        '</div>';
+
+      body.querySelectorAll('[data-saveperms]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var code = btn.dataset.saveperms;
+          var picked = [].map.call(body.querySelectorAll('input[data-role="' + code + '"]:checked'),
+            function (i) { return i.dataset.perm; });
+          api('/api/admin/role/perms', { role: code, permissions: picked }).then(function (res) {
+            if (!res.ok) { window.alert(res.error || '保存失败'); return; }
+            renderRoles();
+          });
+        });
+      });
+      body.querySelectorAll('[data-delrole]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          if (!window.confirm('确定删除角色「' + btn.dataset.delrole + '」？')) return;
+          api('/api/admin/role/delete', { code: btn.dataset.delrole }).then(function (res) {
+            if (!res.ok) { window.alert(res.error || '删除失败'); return; }
+            renderRoles();
+          });
+        });
+      });
+      $('adm-addrole').addEventListener('click', function () {
+        var code = $('adm-newrole-code').value.trim(), name = $('adm-newrole-name').value.trim();
+        if (!code || !name) { window.alert('请填写角色代码和名称'); return; }
+        api('/api/admin/role/create', { code: code, name: name }).then(function (res) {
+          if (!res.ok) { window.alert(res.error || '创建失败'); return; }
+          renderRoles();
+        });
+      });
+      $('adm-assign-go').addEventListener('click', function () {
+        api('/api/admin/role/assign', {
+          id: +$('adm-assign-user').value, role: $('adm-assign-role').value
+        }).then(function (res) {
+          if (!res.ok) { window.alert(res.error || '改派失败'); return; }
+          renderRoles();
+        });
+      });
+    });
   }
 
   function loadAdminData() {
@@ -261,16 +415,23 @@
     gate = $('auth-gate');
     userBar = $('user-bar');
     $('user-logout').addEventListener('click', logout);
-    /* 双保险：即便有人手改 hash 到 #admin，非管理员也立刻踢回总览，
-       不留一个「看得见入口却没内容」的空壳页。后端 403 仍是最终防线。 */
+    /* 统一视图守卫：按 view.<视图> 权限码校验，任何视图（不只 admin）
+       只要数据库没授权就踢回第一个有权限的页面。后端 API 权限是最终防线。 */
     document.addEventListener('eb:view', function (e) {
-      if (e.detail && e.detail.view === 'admin' && (!me || me.role !== 'admin')) {
-        if (window.EB_APP && EB_APP.show) EB_APP.show('overview');
+      if (!e.detail || !e.detail.view) return;
+      var need = 'view.' + e.detail.view;
+      if (!has(need)) {
+        var first = document.querySelector('#nav .navi:not([hidden])');
+        var fallback = first ? first.dataset.v : 'overview';
+        if (e.detail.view !== fallback && window.EB_APP && EB_APP.show) {
+          EB_APP.show(fallback);
+        }
       }
     });
     api('/api/auth/me').then(function (res) {
       if (res.ok && res.user) {
         me = res.user;
+        myPerms = res.permissions || [];
         gate.hidden = true;
         document.body.classList.remove('auth-locked');
         applyUser();
@@ -284,6 +445,8 @@
 
   window.EB_AUTH = {
     me: function () { return me; },
+    perms: function () { return myPerms.slice(); },
+    has: has,
     renderAdmin: renderAdmin,
     logout: logout,
     gate: showGate

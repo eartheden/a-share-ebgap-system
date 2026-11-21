@@ -24,6 +24,48 @@ PBKDF2_ROUNDS = 180000
 MIN_PASSWORD = 6
 MAX_NAME = 20
 
+# ============================================================
+# RBAC 权限点定义（唯一真源）
+# 每个「视图」与「API」都对应一个权限码。后端按码校验，前端按码渲染。
+# 角色不硬编码判断，全部查 role_permissions 表——改权限不需要改代码。
+# ============================================================
+PERMISSIONS = [
+    # 视图（导航菜单）
+    ('view.overview', '总览面板', 'view'),
+    ('view.curve', '利差曲线', 'view'),
+    ('view.signal', '建仓提示', 'view'),
+    ('view.alloc', '配置建议', 'view'),
+    ('view.pick', '选股引擎', 'view'),
+    ('view.paper', '虚拟持仓', 'view'),
+    ('view.stock', '个股分析', 'view'),
+    ('view.history', '历史复盘', 'view'),
+    ('view.limitup', '涨停地图', 'view'),
+    ('view.admin', '会员管理', 'view'),
+    # 业务 API
+    ('api.market', '行情数据', 'api'),
+    ('api.stock', '个股数据', 'api'),
+    ('api.paper', '虚拟持仓读写', 'api'),
+    ('api.advice', '每日建议', 'api'),
+    ('api.ai', 'AI 复核配置与调用', 'api'),
+    # 管理 API
+    ('api.admin.users', '会员管理', 'admin'),
+    ('api.admin.roles', '角色权限管理', 'admin'),
+]
+
+# 默认角色拥有的权限（首次初始化写入 role_permissions）
+DEFAULT_ROLE_PERMS = {
+    'admin': [p[0] for p in PERMISSIONS],
+    'member': [
+        'view.overview', 'view.curve', 'view.signal', 'view.alloc',
+        'view.pick', 'view.paper', 'view.stock', 'view.history', 'view.limitup',
+        'api.market', 'api.stock', 'api.paper', 'api.advice', 'api.ai',
+    ],
+}
+BUILTIN_ROLES = {
+    'admin': ('系统管理员', '拥有全部权限，含会员与角色管理'),
+    'member': ('普通会员', '可使用全部业务功能，不能管理会员与角色'),
+}
+
 
 def now():
     return int(time.time())
@@ -72,6 +114,46 @@ def init_schema(conn):
             user_id INTEGER PRIMARY KEY,
             provider TEXT, base_url TEXT, model TEXT, api_key TEXT
         )''')
+    # ---------- RBAC：角色 / 权限点 / 角色-权限映射 ----------
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS roles (
+            code TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            builtin INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+        )''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS permissions (
+            code TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            module TEXT NOT NULL,
+            description TEXT
+        )''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS role_permissions (
+            role_code TEXT NOT NULL,
+            perm_code TEXT NOT NULL,
+            PRIMARY KEY (role_code, perm_code),
+            FOREIGN KEY(role_code) REFERENCES roles(code) ON DELETE CASCADE,
+            FOREIGN KEY(perm_code) REFERENCES permissions(code) ON DELETE CASCADE
+        )''')
+    # 播种权限点（INSERT OR IGNORE：新增权限码后重启即可自动补入，不覆盖已有）
+    for code, name, module in PERMISSIONS:
+        c.execute('INSERT OR IGNORE INTO permissions(code,name,module) VALUES(?,?,?)',
+                  (code, name, module))
+    # 播种内置角色（admin / member），已存在则不覆盖用户改过的名字
+    for code, (name, desc) in BUILTIN_ROLES.items():
+        c.execute('INSERT OR IGNORE INTO roles(code,name,description,builtin,created_at) VALUES(?,?,?,1,?)',
+                  (code, name, desc, now()))
+    # 只有首次初始化（该角色还没有任何授权）时才写入默认权限，
+    # 否则管理员 adjust 过的授权会在每次启动被覆盖回去。
+    for code, perms in DEFAULT_ROLE_PERMS.items():
+        has = c.execute('SELECT 1 FROM role_permissions WHERE role_code=? LIMIT 1', (code,)).fetchone()
+        if not has:
+            for perm in perms:
+                c.execute('INSERT OR IGNORE INTO role_permissions(role_code,perm_code) VALUES(?,?)',
+                          (code, perm))
     # 给业务表补 user_id（老记录=0，登录后的普通用户看不到）
     for table in ('paper_trades', 'daily_advice'):
         have = {r['name'] for r in c.execute('PRAGMA table_info(%s)' % table).fetchall()}
@@ -143,6 +225,106 @@ def logout(c, token):
 
 def purge_expired(c):
     c.execute('DELETE FROM sessions WHERE expires_at<=?', (now(),))
+
+
+# ---------- RBAC 权限查询 ----------
+def permissions_of(c, role_code):
+    """某角色的权限码集合。"""
+    return {r['perm_code'] for r in c.execute(
+        'SELECT perm_code FROM role_permissions WHERE role_code=?', (role_code,)).fetchall()}
+
+
+def has_permission(c, user, perm_code):
+    """用户是否拥有某权限点（唯一鉴权入口）。
+    超级管理员角色 admin 拥有一切权限的语义由默认授权覆盖；
+    若管理员手动取消某权限，这里也会如实返回 False。"""
+    if not user or not user['active']:
+        return False
+    return perm_code in permissions_of(c, user['role'])
+
+
+def require_permission(c, user, perm_code):
+    """不满足则抛异常，由上层转成 403。"""
+    if not has_permission(c, user, perm_code):
+        raise PermissionError('没有权限：%s' % perm_code)
+
+
+def count_users_with_permission(c, perm_code, exclude_id=None, active_only=True):
+    """拥有某权限点的会员数（用于「至少保留一名管理员」这类保护）。"""
+    sql = '''SELECT COUNT(DISTINCT u.id) FROM users u
+             JOIN role_permissions rp ON rp.role_code=u.role
+             WHERE rp.perm_code=?'''
+    args = [perm_code]
+    if active_only:
+        sql += ' AND u.active=1'
+    if exclude_id is not None:
+        sql += ' AND u.id<>?'
+        args.append(exclude_id)
+    return c.execute(sql, args).fetchone()[0]
+
+
+def all_roles(c):
+    roles = []
+    for r in c.execute('SELECT * FROM roles ORDER BY builtin DESC, code').fetchall():
+        d = dict(r)
+        d['builtin'] = bool(d['builtin'])
+        d['permissions'] = sorted(permissions_of(c, d['code']))
+        d['users'] = c.execute('SELECT COUNT(*) FROM users WHERE role=?', (d['code'],)).fetchone()[0]
+        roles.append(d)
+    return roles
+
+
+def all_permissions(c):
+    """按 PERMISSIONS 里的声明顺序返回（与导航/接口顺序一致），
+    这样前端权限勾选面板的分组和条目读起来是业务顺序而不是字母序。"""
+    order = {p[0]: i for i, p in enumerate(PERMISSIONS)}
+    rows = [dict(r) for r in c.execute('SELECT * FROM permissions').fetchall()]
+    rows.sort(key=lambda r: order.get(r['code'], 9999))
+    return rows
+
+
+KEEP_ADMIN_PERMS = ('api.admin.users', 'api.admin.roles', 'view.admin')
+
+
+def set_role_permissions(c, role_code, perm_codes):
+    """覆盖式设置角色权限。内置 admin 角色不能被清空到无任何权限，
+    否则系统会失去管理能力（至少保留会员管理、角色管理、管理页面入口）。"""
+    if not isinstance(perm_codes, list):
+        raise ValueError('权限列表必须是数组')
+    known = {p[0] for p in PERMISSIONS}
+    wanted = {str(x) for x in perm_codes} & known
+    if role_code == 'admin':
+        wanted |= set(KEEP_ADMIN_PERMS)
+    c.execute('DELETE FROM role_permissions WHERE role_code=?', (role_code,))
+    for perm in wanted:
+        c.execute('INSERT INTO role_permissions(role_code,perm_code) VALUES(?,?)',
+                  (role_code, perm))
+    return sorted(wanted)
+
+
+def create_role(c, code, name, description=''):
+    code = str(code or '').strip().lower()
+    name = str(name or '').strip()
+    if not re_ascii(code) or not name:
+        raise ValueError('角色代码只能用字母数字下划线，名称不能为空')
+    if c.execute('SELECT 1 FROM roles WHERE code=?', (code,)).fetchone():
+        raise ValueError('角色代码已存在')
+    c.execute('INSERT INTO roles(code,name,description,builtin,created_at) VALUES(?,?,?,0,?)',
+              (code, name, str(description or '')[:100], now()))
+    return dict(c.execute('SELECT * FROM roles WHERE code=?', (code,)).fetchone())
+
+
+def delete_role(c, code):
+    role = c.execute('SELECT * FROM roles WHERE code=?', (code,)).fetchone()
+    if not role:
+        raise ValueError('角色不存在')
+    if role['builtin']:
+        raise ValueError('内置角色不能删除')
+    used = c.execute('SELECT COUNT(*) FROM users WHERE role=?', (code,)).fetchone()[0]
+    if used:
+        raise ValueError('还有 %d 个会员使用这个角色，请先改派' % used)
+    c.execute('DELETE FROM role_permissions WHERE role_code=?', (code,))
+    c.execute('DELETE FROM roles WHERE code=?', (code,))
 
 
 def claim_legacy(c, user_id, is_first_admin):
