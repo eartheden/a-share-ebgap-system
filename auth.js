@@ -58,6 +58,7 @@
   function showGate(msg) {
     me = null;
     myPerms = [];
+    clearUserData();          // 会话过期/被踢下线时同样不能留下持仓数据
     gate.hidden = false;
     document.body.classList.add('auth-locked');
     if (userBar) userBar.hidden = true;
@@ -126,6 +127,7 @@
         if (!res.ok) throw new Error(res.error || '登录失败');
         me = res.user;
         myPerms = res.permissions || [];
+        clearUserData();          // 新会员登录：先清空上一个人残留的个人数据
         gate.hidden = true;
         document.body.classList.remove('auth-locked');
         applyUser();
@@ -165,9 +167,17 @@
     api('/api/auth/logout', {}).then(function () {
       me = null;
       myPerms = [];
+      clearUserData();
       if (window.EB_APP && EB_APP.show) EB_APP.show('overview');
       showGate('已退出登录');
     });
+  }
+
+  /* 换账号时必须清掉上一位会员留在内存里的个人数据。
+     之前只清了 me / myPerms，虚拟持仓模块的 S.trades 还在，
+     下一个人进来会直接看到上一个人的持仓（实测过，属于资产数据串号）。 */
+  function clearUserData() {
+    if (window.EB_PAPER && EB_PAPER.reset) EB_PAPER.reset();
   }
 
   /* ---------- 会员管理视图（由 app.js 的 RENDER.admin 调用） ---------- */

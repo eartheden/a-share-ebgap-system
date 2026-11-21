@@ -2,7 +2,7 @@
    09 · 虚拟持仓 · 模拟交易台  (paper.js)
    ------------------------------------------------------------
    从 picker.js 里抽出来的独立模块，负责：
-     · 持仓数据的读写（本机 SQLite /api/paper/*，本地快照兜底）
+     · 持仓数据的读写（账号数据库 /api/paper/*，按 user_id 隔离；本地快照仅作显示缓存）
      · 报价同步（东财 ulist → /api/paper/tick，服务端执行止损/止盈纪律）
      · 账户概览、纪律预警、持仓表、已平仓统计、行业分布、已实现曲线
      · 点开单只持仓 → K 线抽屉，图上标注买入点、止损线、目标线、建议买区
@@ -12,8 +12,15 @@
 (function () {
   'use strict';
 
-  var LKEY = 'ebgap.paper.v1';       // 本地快照（离线兜底 / 老数据迁移）
-  var MKEY = 'ebgap.paper.migrated.v1';
+  /* 本地快照与内存状态都必须按会员隔离：同一台电脑换账号登录时，既不能把
+     上一个会员的持仓显示给下一个人，也不能把它的本地快照当成新会员的数据
+     补传进数据库（虚拟持仓是个人资产，串号比样式问题严重得多）。 */
+  function curUid() {
+    var m = window.EB_AUTH && window.EB_AUTH.me && window.EB_AUTH.me();
+    return m && m.id ? String(m.id) : 'anon';
+  }
+  function LKEY() { return 'ebgap.paper.v2.u' + curUid(); }
+  function MKEY() { return 'ebgap.paper.migrated.v2.u' + curUid(); }
   var AUTO_MS = 30000;               // 页面可见时自动刷新报价
 
   var S = {
@@ -32,6 +39,41 @@
     busy: false,
     mounted: false
   };
+
+  /* 当前内存里的数据属于哪个会员。换账号时整体清空，否则 enter() 里的
+     if (!S.loaded) 判断会直接拿上一个人的持仓渲染，连接口都不请求。 */
+  var scopeUid = null;
+  function syncScope() {
+    var u = curUid();
+    if (u === scopeUid) return false;
+    scopeUid = u;
+    S.trades = [];
+    S.quotes = {};
+    S.quoteAt = null;
+    S.loaded = false;
+    S.loading = false;
+    S.error = null;
+    S.drawerId = null;
+    S.chartCode = null;
+    return true;
+  }
+
+  /* 会员系统上线前的单机数据存在全局键 ebgap.paper.v1 里，属于系统最初的使用者。
+     只让能管理会员的账号（站长本人）认领一次：其他人一律不碰，
+     否则新会员会把别人的历史持仓当成自己的补传进数据库。 */
+  function adoptLegacy() {
+    if (curUid() === 'anon') return;
+    if (!(window.EB_AUTH && EB_AUTH.has && EB_AUTH.has('api.admin.users'))) return;
+    var legacy;
+    try { legacy = localStorage.getItem('ebgap.paper.v1'); } catch (e) { return; }
+    if (!legacy) return;
+    try {
+      if (localStorage.getItem(LKEY())) return;   // 已经有自己的快照，不覆盖
+      localStorage.setItem(LKEY(), legacy);
+      localStorage.removeItem('ebgap.paper.v1');
+      localStorage.removeItem('ebgap.paper.migrated.v1');
+    } catch (e) { /* 忽略配额/隐私模式 */ }
+  }
 
   /* ---------------- 小工具 ---------------- */
   function el(id) { return document.getElementById(id); }
@@ -178,13 +220,15 @@
   }
 
   function localSnapshot() {
+    if (curUid() === 'anon') return [];
     try {
-      var a = JSON.parse(localStorage.getItem(LKEY) || '[]');
+      var a = JSON.parse(localStorage.getItem(LKEY()) || '[]');
       return Array.isArray(a) ? a : [];
     } catch (e) { return []; }
   }
   function saveLocal() {
-    try { localStorage.setItem(LKEY, JSON.stringify(S.trades)); } catch (e) { /* ignore */ }
+    if (curUid() === 'anon') return;
+    try { localStorage.setItem(LKEY(), JSON.stringify(S.trades)); } catch (e) { /* ignore */ }
   }
 
   /* 老版本把记录存在浏览器里：首次连上数据库且库为空时补传一次 */
@@ -203,18 +247,20 @@
       });
     });
     return chain.then(function () {
-      try { localStorage.setItem(MKEY, '1'); } catch (e) { /* ignore */ }
+      try { localStorage.setItem(MKEY(), '1'); } catch (e) { /* ignore */ }
     });
   }
 
-  function load(force) {
+  function load() {
+    syncScope();                  // 换账号时清掉上一个人的内存数据
     if (S.loading) return Promise.resolve();
     S.loading = true;
+    adoptLegacy();                // 幂等：只在站长账号、且还没有自己快照时认领一次
     if (!S.trades.length) S.trades = localSnapshot();
     return apiGet('/api/paper/list').then(function (res) {
       if (!res || !res.ok) throw new Error('接口返回异常');
       var migrated = false;
-      try { migrated = localStorage.getItem(MKEY) === '1'; } catch (e) { /* ignore */ }
+      try { migrated = localStorage.getItem(MKEY()) === '1'; } catch (e) { /* ignore */ }
       if (!res.trades.length && S.trades.length && !migrated) {
         return migrateLocal(S.trades.slice()).then(function () {
           return apiGet('/api/paper/list');
@@ -398,7 +444,7 @@
     box.innerHTML =
       '<div class="vhead"><h1>虚拟持仓 · 模拟交易台</h1>' +
       '<p class="sub">从选股引擎的候选卡「虚拟买入」开仓，这里统一管理：按最新行情算浮动盈亏、自动执行止损与止盈纪律、' +
-      '点开任意一笔就能看到 K 线与买入点标注，需要深挖时一键跳到个股分析。所有记录写在本机 SQLite（ebgap.db），不经过第三方。</p></div>' +
+      '点开任意一笔就能看到 K 线与买入点标注，需要深挖时一键跳到个股分析。所有记录都写进你账号的数据库，跟着账号走——换台电脑登录一样能看到，别的会员看不到。</p></div>' +
       '<div class="pp-topbar">' +
       '<button class="pp-btn pp-btn-main" id="pp-sync">同步最新报价</button>' +
       '<button class="pp-btn" id="pp-csv">导出 CSV</button>' +
@@ -1229,7 +1275,8 @@
   /* ---------------- 入口 ---------------- */
   function enter() {
     mount();
-    if (!S.loaded) return load();
+    // 换账号必须重新拉数据：只看 S.loaded 会把上一位会员的持仓当成本人的
+    if (syncScope() || !S.loaded) return load();
     render();
     if (!S.quoteAt || Date.now() - S.quoteAt > 20000) return syncQuotes();
   }
@@ -1264,6 +1311,8 @@
     findOpen: findOpen,
     pushPrices: pushPrices,
     syncQuotes: syncQuotes,
-    state: S
+    state: S,
+    /* 登出／换账号时由 auth.js 调用：立刻丢掉当前会员的持仓，不等下次进入页面 */
+    reset: function () { scopeUid = null; syncScope(); }
   };
 })();
