@@ -223,6 +223,34 @@ def logout(c, token):
         c.execute('DELETE FROM sessions WHERE token=?', (token,))
 
 
+def change_password(c, user_id, old_password, new_password, keep_token=None):
+    """会员自助改密码（管理员也一样走这里）。
+
+    三点要求：
+      1) 必须验原密码，否则任何拿到未锁屏浏览器的人都能直接改；
+      2) 新密码长度不得低于注册时的下限，也不能和原密码相同；
+      3) 改完把其它设备上的会话全部失效——密码换了，旧登录态就该作废。
+         当前这台保留（keep_token），不然用户会被自己踢下线。
+    """
+    row = c.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
+    if not row:
+        raise ValueError('账号不存在')
+    old_password = str(old_password or '')
+    if not verify_password(old_password, row['password']):
+        raise ValueError('原密码不正确')
+    new_password = str(new_password or '')
+    if len(new_password) < MIN_PASSWORD:
+        raise ValueError('新密码至少 %d 位' % MIN_PASSWORD)
+    if new_password == old_password:
+        raise ValueError('新密码不能和原密码相同')
+    c.execute('UPDATE users SET password=? WHERE id=?', (hash_password(new_password), user_id))
+    if keep_token:
+        c.execute('DELETE FROM sessions WHERE user_id=? AND token<>?', (user_id, keep_token))
+    else:
+        c.execute('DELETE FROM sessions WHERE user_id=?', (user_id,))
+    return True
+
+
 def purge_expired(c):
     c.execute('DELETE FROM sessions WHERE expires_at<=?', (now(),))
 

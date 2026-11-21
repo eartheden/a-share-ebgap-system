@@ -521,6 +521,17 @@ class Handler(SimpleHTTPRequestHandler):
                 auth.logout(conn, self._token())
                 conn.commit()
                 return self._json_with_cookie({'ok': True}, None)   # 清 cookie
+            if self.path.startswith('/api/auth/password'):
+                # 自助改密码：只改自己，不接受任何 user_id 参数
+                token = self._token()
+                user = auth.user_by_token(conn, token)
+                if not user:
+                    return self._need_auth()
+                auth.change_password(conn, user['id'],
+                                     data.get('old_password'), data.get('new_password'),
+                                     keep_token=token)
+                conn.commit()
+                return self._json({'ok': True})
             return self._json({'ok': False, 'error': 'unknown auth endpoint'}, 404)
         finally:
             conn.close()

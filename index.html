@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="limitup.css?v=1">
 <link rel="stylesheet" href="paper.css?v=5">
 <link rel="stylesheet" href="theme.css?v=10">
-<link rel="stylesheet" href="auth.css?v=7">
+<link rel="stylesheet" href="auth.css?v=8">
 <link rel="icon" href="data:,">
 </head>
 <body>
@@ -36,7 +36,8 @@
   <div class="user-bar" id="user-bar" hidden>
     <span class="user-avatar" id="user-avatar">—</span>
     <div class="user-meta"><b id="user-name">—</b><span id="user-role">—</span></div>
-    <button class="user-logout" id="user-logout" title="退出登录">退出</button>
+    <button class="user-pwd" id="user-pwd" title="修改我的登录密码" type="button">改密</button>
+    <button class="user-logout" id="user-logout" title="退出登录" type="button">退出</button>
   </div>
   <div class="side-foot">
     <div class="live-badge on-loading" id="sf-live">
@@ -407,8 +408,30 @@
 
 </main>
 
+<!-- ============ 修改密码（自助，任何登录会员含管理员都可用） ============ -->
+<div class="pwd-mask" id="pwd-mask" hidden>
+  <div class="pwd-box" role="dialog" aria-modal="true" aria-labelledby="pwd-title">
+    <div class="pwd-h">
+      <b id="pwd-title">修改登录密码</b>
+      <button class="pwd-x" id="pwd-close" type="button" aria-label="关闭">×</button>
+    </div>
+    <p class="pwd-sub">当前账号 <b id="pwd-who">—</b>，改完其它设备需要重新登录。</p>
+    <label class="pwd-f"><span>原密码</span>
+      <input type="password" id="pwd-old" autocomplete="current-password" placeholder="请输入当前密码"></label>
+    <label class="pwd-f"><span>新密码</span>
+      <input type="password" id="pwd-new" autocomplete="new-password" placeholder="至少 6 位"></label>
+    <label class="pwd-f"><span>确认新密码</span>
+      <input type="password" id="pwd-new2" autocomplete="new-password" placeholder="再输入一次新密码"></label>
+    <p class="pwd-msg" id="pwd-msg"></p>
+    <div class="pwd-foot">
+      <button class="pwd-btn" id="pwd-cancel" type="button">取消</button>
+      <button class="pwd-btn main" id="pwd-save" type="button">保存新密码</button>
+    </div>
+  </div>
+</div>
+
 <script src="echarts.min.js"></script>
-<script src="auth.js?v=9"></script>
+<script src="auth.js?v=11"></script>
 <script src="data.js?v=2"></script>
 <script src="stocks.js?v=4"></script>
 <script src="live.js?v=4"></script>

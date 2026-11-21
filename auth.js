@@ -25,7 +25,10 @@
     var url = String((input && input.url) || input || '');
     return _fetch(input, init).then(function (res) {
       if (res.status === 401 && url.indexOf('/api/auth/') < 0) {
-        showGate('登录已过期，请重新登录');
+        /* 只有「本来登录着、突然 401」才是会话过期。刚打开页面时后台模块
+           （行情轮询等）也会 401，那不是过期，不能弹「登录已过期」，
+           更不能重绘登录框把用户正在输的账号密码清掉。 */
+        showGate(me ? '登录已过期，请重新登录' : '');
       }
       return res;
     });
@@ -64,13 +67,20 @@
 
   /* ---------- 登录门 ---------- */
   function showGate(msg) {
+    var hadUser = !!me;
+    var wasOpen = !!(gate && !gate.hidden);
     me = null;
     myPerms = [];
     clearUserData();          // 会话过期/被踢下线时同样不能留下持仓数据
+    if (!gate) gate = $('auth-gate');
+    if (!gate) return;
     gate.hidden = false;
     document.body.classList.add('auth-locked');
     if (userBar) userBar.hidden = true;
     applyNav();
+    /* 已经在登录页、本来就没登录、也没有要提示的信息 → 不重绘，
+       否则后台轮询的 401 会把用户输了一半的账号密码冲掉。 */
+    if (wasOpen && !hadUser && !msg) return;
     renderGate(msg);
   }
 
@@ -429,11 +439,81 @@
     });
   }
 
+  /* ---------- 修改自己的登录密码 ----------
+     任何登录会员都能用（管理员也是会员）。只改当前会话这个账号，
+     接口不接受 user_id 参数；改完其它设备的会话会被服务端踢掉。 */
+  function pwdMsg(text, kind) {
+    var m = $('pwd-msg');
+    if (!m) return;
+    m.textContent = text || '';
+    m.className = 'pwd-msg' + (kind ? ' ' + kind : '');
+  }
+
+  function openPwd() {
+    if (!me) return;
+    $('pwd-who').textContent = me.username;
+    $('pwd-old').value = '';
+    $('pwd-new').value = '';
+    $('pwd-new2').value = '';
+    pwdMsg('');
+    $('pwd-save').disabled = false;
+    $('pwd-save').textContent = '保存新密码';
+    $('pwd-mask').hidden = false;
+    setTimeout(function () { var i = $('pwd-old'); if (i) i.focus(); }, 50);
+  }
+
+  function closePwd() {
+    $('pwd-mask').hidden = true;
+    $('pwd-old').value = '';
+    $('pwd-new').value = '';
+    $('pwd-new2').value = '';
+    pwdMsg('');
+  }
+
+  function submitPwd() {
+    var oldPwd = $('pwd-old').value;
+    var np = $('pwd-new').value;
+    var np2 = $('pwd-new2').value;
+    if (!oldPwd) { pwdMsg('请输入原密码', 'err'); return; }
+    if (np.length < 6) { pwdMsg('新密码至少 6 位', 'err'); return; }
+    if (np !== np2) { pwdMsg('两次输入的新密码不一致', 'err'); return; }
+    if (np === oldPwd) { pwdMsg('新密码不能和原密码相同', 'err'); return; }
+    var btn = $('pwd-save');
+    btn.disabled = true;
+    btn.textContent = '保存中…';
+    pwdMsg('');
+    api('/api/auth/password', { old_password: oldPwd, new_password: np }).then(function (res) {
+      if (!res.ok) throw new Error(res.error || '保存失败');
+      pwdMsg('密码已更新，本机保持登录', 'ok');
+      btn.textContent = '已保存';
+      setTimeout(function () { closePwd(); }, 1100);
+    }).catch(function (e) {
+      pwdMsg(e.message || '保存失败', 'err');
+      btn.disabled = false;
+      btn.textContent = '保存新密码';
+    });
+  }
+
   /* ---------- 启动 ---------- */
   function boot() {
     gate = $('auth-gate');
     userBar = $('user-bar');
     $('user-logout').addEventListener('click', logout);
+    $('user-pwd').addEventListener('click', openPwd);
+    $('pwd-close').addEventListener('click', closePwd);
+    $('pwd-cancel').addEventListener('click', closePwd);
+    $('pwd-save').addEventListener('click', submitPwd);
+    $('pwd-mask').addEventListener('click', function (e) {
+      if (e.target === this) closePwd();     // 点遮罩关闭，点框内不关
+    });
+    ['pwd-old', 'pwd-new', 'pwd-new2'].forEach(function (id) {
+      $(id).addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); submitPwd(); }
+      });
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && $('pwd-mask') && !$('pwd-mask').hidden) closePwd();
+    });
     /* 统一视图守卫：按 view.<视图> 权限码校验，任何视图（不只 admin）
        只要数据库没授权就踢回第一个有权限的页面。后端 API 权限是最终防线。 */
     document.addEventListener('eb:view', function (e) {
