@@ -19,8 +19,8 @@
     var m = window.EB_AUTH && window.EB_AUTH.me && window.EB_AUTH.me();
     return m && m.id ? String(m.id) : 'anon';
   }
-  function LKEY() { return 'ebgap.paper.v2.u' + curUid(); }
-  function MKEY() { return 'ebgap.paper.migrated.v2.u' + curUid(); }
+  function LKEY() { return window.EB_NS ? EB_NS.ukey('ebgap.paper.v2') : 'ebgap.paper.v2.u' + curUid(); }
+  function MKEY() { return window.EB_NS ? EB_NS.ukey('ebgap.paper.migrated.v2') : 'ebgap.paper.migrated.v2.u' + curUid(); }
   var AUTO_MS = 30000;               // 页面可见时自动刷新报价
 
   var S = {

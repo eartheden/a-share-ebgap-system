@@ -44,6 +44,14 @@
   /* ---------- RBAC：按权限码判断，不再看 role 字符串 ---------- */
   function has(perm) { return myPerms.indexOf(perm) >= 0; }
 
+  /* ---------- 本地缓存键统一按会员隔离 ----------
+     同一台电脑换账号时，个人数据（虚拟持仓、选股历史、搜索记录、AI 复核缓存）
+     绝不能串给下一个人。行情类缓存（涨停快照、两市成交额）不在此列——
+     那是公共数据，共享才对，也省请求。 */
+  function ukey(base) {
+    return base + '.u' + ((me && me.id) ? me.id : 'anon');
+  }
+
   /* 按 data-perm 显隐所有导航项：菜单由数据库授权决定，前端不硬编码角色 */
   function applyNav() {
     document.querySelectorAll('#nav .navi').forEach(function (b) {
@@ -178,6 +186,7 @@
      下一个人进来会直接看到上一个人的持仓（实测过，属于资产数据串号）。 */
   function clearUserData() {
     if (window.EB_PAPER && EB_PAPER.reset) EB_PAPER.reset();
+    if (window.EB_AI && EB_AI.reset) EB_AI.reset();
   }
 
   /* ---------- 会员管理视图（由 app.js 的 RENDER.admin 调用） ---------- */
@@ -461,6 +470,9 @@
     logout: logout,
     gate: showGate
   };
+
+  /* 供其他模块给本地缓存键加会员后缀，如 EB_NS.ukey('ebgap.pick.hist.v4') */
+  window.EB_NS = { ukey: ukey };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();

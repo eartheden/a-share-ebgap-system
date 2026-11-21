@@ -1320,7 +1320,10 @@
   /* ================= 搜索建议 + 查询历史 ================= */
 
   var SUG_API = '/api/stock/suggest';
-  var HIST_KEY = 'ebgap.stock.history.v1';
+  /* 搜索历史是个人痕迹，按会员隔离，免得同一台电脑换账号看到别人的关注标的 */
+  function HIST_KEY() {
+    return window.EB_NS ? EB_NS.ukey('ebgap.stock.history.v2') : 'ebgap.stock.history.v2';
+  }
   var HIST_MAX = 12;
 
   // 输入框里显示名称比显示代码好认，但「分析」和「回车」都要能拿回代码，
@@ -1418,7 +1421,7 @@
 
   function histRead() {
     try {
-      var raw = localStorage.getItem(HIST_KEY);
+      var raw = localStorage.getItem(HIST_KEY());
       var arr = raw ? JSON.parse(raw) : [];
       if (!Array.isArray(arr)) return [];
       return arr.filter(function (x) { return x && /^\d{6}$/.test(String(x.code || '')); });
@@ -1426,7 +1429,7 @@
   }
 
   function histWrite(arr) {
-    try { localStorage.setItem(HIST_KEY, JSON.stringify(arr.slice(0, HIST_MAX))); } catch (e) { /* 隐私模式下写不进去，忽略 */ }
+    try { localStorage.setItem(HIST_KEY(), JSON.stringify(arr.slice(0, HIST_MAX))); } catch (e) { /* 隐私模式下写不进去，忽略 */ }
   }
 
   function ago(ts) {

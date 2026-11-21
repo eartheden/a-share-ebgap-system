@@ -24,7 +24,10 @@
   var POOL_CONCURRENCY = 6;
   var POOL_LIMIT = 60;         // 候选池表格最多展示行数
   var CACHE_MS = 3 * 60 * 1000; // 内存行情缓存 3 分钟
-  var HKEY = 'ebgap.pick.hist.v3';
+  /* 选股历史：本地只当缓存，真正的真源是 daily_advice 表（带 user_id）。
+     v4 起键按会员隔离，并且每次 loadAdvice 会用数据库里的记录回填，
+     所以换台电脑登录也能看到自己的历史。 */
+  function HKEY() { return window.EB_NS ? EB_NS.ukey('ebgap.pick.hist.v4') : 'ebgap.pick.hist.v4'; }
 
   var DIM = [
     { key: 'd1', name: '资金动能', short: '资金', desc: '主力净额及其占成交额比重' },
@@ -1204,12 +1207,56 @@
   }
 
   /* ================= 历史记录 ================= */
+  /* 同一标签页换账号不刷新时，S.hist / S.advice / S.ai 里还是上一位会员的东西。
+     行情数据（S.raw）是公共的，不用清；个人那几份必须清干净再重新拉。 */
+  var pickScope = null;
+  function syncScope() {
+    var m = window.EB_AUTH && EB_AUTH.me && EB_AUTH.me();
+    var u = (m && m.id) ? String(m.id) : 'anon';
+    if (u === pickScope) return false;
+    pickScope = u;
+    S.hist = [];
+    S.advice = null;
+    S.ai = null;
+    return true;
+  }
+
   function loadHist() {
-    try { S.hist = JSON.parse(localStorage.getItem(HKEY) || '[]'); } catch (e) { S.hist = []; }
+    try { S.hist = JSON.parse(localStorage.getItem(HKEY()) || '[]'); } catch (e) { S.hist = []; }
     if (!Array.isArray(S.hist)) S.hist = [];
     /* 丢掉未来日期的脏记录（早期时区计算错误会写入次日） */
     var today = ymd(bjNow());
     S.hist = S.hist.filter(function (h) { return h && h.date && h.date <= today; });
+  }
+  function saveHist() {
+    if (!S.hist) return;
+    try { localStorage.setItem(HKEY(), JSON.stringify(S.hist)); } catch (e) { /* ignore */ }
+  }
+  /* 用数据库里的每日建议回填本地历史：数据库是账号的真源，
+     换设备/清缓存后也能把自己以前的名单和成绩看回来。 */
+  function mergeAdviceIntoHist(rows) {
+    if (!Array.isArray(rows) || !rows.length) return false;
+    var changed = false;
+    rows.forEach(function (a) {
+      if (!a || !a.date || !a.picks || !a.picks.length) return;
+      var day = {
+        date: a.date,
+        mode: a.regime,
+        temp: a.temp,
+        picks: a.picks.map(function (p) {
+          return { code: p.code, name: p.name, price: p.price, score: p.score, ind: p.ind, hz: p.hz };
+        })
+      };
+      var idx = -1;
+      S.hist.forEach(function (h, i) { if (h && h.date === day.date) idx = i; });
+      if (idx >= 0) S.hist[idx] = day; else S.hist.push(day);
+      changed = true;
+    });
+    if (!changed) return false;
+    S.hist.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+    if (S.hist.length > 20) S.hist = S.hist.slice(0, 20);
+    saveHist();
+    return true;
   }
   function recordHistory() {
     if (!S.allPicks || !S.allPicks.length || !S.quoteDate) return;
@@ -1231,7 +1278,7 @@
     if (!found) S.hist.push(day);
     S.hist.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
     if (S.hist.length > 20) S.hist = S.hist.slice(0, 20);
-    try { localStorage.setItem(HKEY, JSON.stringify(S.hist)); } catch (e) { /* ignore */ }
+    saveHist();
     saveAmount();
     pushAdvice();
   }
@@ -1268,6 +1315,8 @@
     apiGet('/api/advice/list?limit=8').then(function (res) {
       if (!res || !res.ok) return;
       S.advice = res.advice || [];
+      /* 数据库里这个账号的历史建议是最全的，回填本地后历史回看才跟账号走 */
+      if (mergeAdviceIntoHist(S.advice)) renderHist();
       renderAdvice();
     }).catch(function () { /* 离线 */ });
   }
@@ -1880,7 +1929,7 @@
     var box = el('pk-hist');
     if (!box) return;
     if (!S.hist || !S.hist.length) {
-      box.innerHTML = '<p class="pk-hist-empty">还没有历史记录。每天打开本页并成功刷新一次，当天的推荐名单就会存到本机（localStorage），下次可以回来核对表现。</p>';
+      box.innerHTML = '<p class="pk-hist-empty">还没有历史记录。每天打开本页并成功刷新一次，当天的名单就会存进你账号的数据库，换台电脑登录也能回来核对表现。</p>';
       return;
     }
     var now = {};
@@ -1963,6 +2012,7 @@
 
   function render() {
     if (!el('v-pick')) return;
+    syncScope();
     loadHist();
     loadAdvice();
     renderState();

@@ -87,10 +87,18 @@
     return String(h);
   }
 
-  /* ---------------- 缓存 ---------------- */
+  /* ---------------- 缓存 ----------------
+     复核结果是用当前会员自己的 API Key 花钱生成的，缓存键必须带会员 id：
+     否则同一台电脑换账号会直接读到上一个人买过的结果，既串数据也白省他的钱。 */
+  function uidSuffix() {
+    var m = window.EB_AUTH && EB_AUTH.me && EB_AUTH.me();
+    return '.u' + ((m && m.id) ? m.id : 'anon');
+  }
+  function cacheKey(date) { return CACHE_PREFIX + (date || '') + uidSuffix(); }
+
   function cacheRead(pl) {
     if (!pl) return null;
-    var key = CACHE_PREFIX + (pl.quoteDate || '');
+    var key = cacheKey(pl.quoteDate);
     try {
       var c = JSON.parse(localStorage.getItem(key) || 'null');
       if (c && c.hash === fingerprint(pl)) return c;
@@ -99,17 +107,19 @@
   }
   function cacheWrite(pl, res, model, usage) {
     if (!pl) return;
-    var key = CACHE_PREFIX + (pl.quoteDate || '');
+    var key = cacheKey(pl.quoteDate);
     try {
       localStorage.setItem(key, JSON.stringify({
         hash: fingerprint(pl), result: res, at: Date.now(), model: model, usage: usage
       }));
     } catch (e) { /* ignore */ }
+    /* 只清自己名下的旧日期缓存，别人的一个都不碰 */
+    var fold = uidSuffix();
     Object.keys(localStorage).forEach(function (k) {
-      if (k.indexOf(CACHE_PREFIX) === 0 && k !== key) {
-        var d = k.slice(CACHE_PREFIX.length);
-        if (d < (pl.quoteDate || '')) localStorage.removeItem(k);
-      }
+      if (k.indexOf(CACHE_PREFIX) !== 0 || k === key) return;
+      if (k.slice(-fold.length) !== fold) return;
+      var d = k.slice(CACHE_PREFIX.length, k.length - fold.length);
+      if (d < (pl.quoteDate || '')) localStorage.removeItem(k);
     });
   }
 
@@ -408,7 +418,14 @@
     render();
   }
 
-  window.EB_AI = { mount: mount, run: runReview, check: check, state: S };
+  window.EB_AI = {
+    mount: mount, run: runReview, check: check, state: S,
+    /* 换账号时清掉上一位会员的复核结果（内存里那份也是他的） */
+    reset: function () {
+      S.result = null; S.resultFp = null; S.at = null; S.model = '';
+      S.usage = null; S.error = null; S.running = false; S.pendingFp = null;
+    }
+  };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', mount);
