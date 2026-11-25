@@ -156,7 +156,13 @@ def init_schema(conn):
                 c.execute('INSERT OR IGNORE INTO role_permissions(role_code,perm_code) VALUES(?,?)',
                           (code, perm))
     # 给业务表补 user_id（老记录=0，登录后的普通用户看不到）
+    # 仅在目标表已存在时才补列，避免空库首次初始化时报错
+    existing_tables = {
+        r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
     for table in ('paper_trades', 'daily_advice'):
+        if table not in existing_tables:
+            continue
         have = {r['name'] for r in c.execute('PRAGMA table_info(%s)' % table).fetchall()}
         if 'user_id' not in have:
             c.execute('ALTER TABLE %s ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0' % table)
@@ -202,6 +208,7 @@ def login(c, username, password):
     row = c.execute('SELECT * FROM users WHERE username=?', (str(username or '').strip(),)).fetchone()
     if not row or not row['active'] or not verify_password(str(password or ''), row['password']):
         raise ValueError('用户名或密码错误（或账号已被停用）')
+    purge_expired(c)
     c.execute('UPDATE users SET last_login=? WHERE id=?', (now(), row['id']))
     token = secrets.token_urlsafe(32)
     c.execute('INSERT INTO sessions(token,user_id,created_at,expires_at) VALUES(?,?,?,?)',

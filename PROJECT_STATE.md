@@ -2,7 +2,7 @@
 
 > 更新：2026-11-25 18:56
 > 当前档位：全团档（全量修复 + 重构）
-> 当前阶段：Phase 1 契约（修复清单锁定）
+> 当前阶段：Phase 2 完成，Phase 3 待启动
 
 ## ⚠️ 核心发现：报告审错了副本
 报告分析的是 `/Users/liamwang/Desktop/A股股债利差系统`（server.py 1955 行旧版），
@@ -47,14 +47,23 @@
 | 无测试框架 | **真** | 第三阶段 |
 
 ## 已完成（带路径）
+- Phase 1 三条真修复（提交 98c23c0，已 push）：
+  - app.js 深链接参数保留
+  - ai.js reset 清 booted
+  - auth.js + dragon.js 换号清龙头战法状态
 - 服务恢复在线（后台任务 KfaIQT，端口 8899）
 - 项目已在 `~/WorkBuddy/A股股债利差系统`（Desktop 原件保留）
 - 龙头战法模块已落地（提交 4f77357）
 
+## Phase 2 已完成（带路径）
+- 98c23c0 三条真修复（深链接/AI booted/换号清 dragon）
+- 9da1bdc 安全加固（stock.js XSS 转义、paper.js 负ID 撤销）
+- 0ed172c 文案与配置（fundamental 4 处、index/app 过期文案、pages.yml 废弃）
+
 ## 下一步（≤3 条）
-1. 修必修 7 项（daily_advice 复合主键 / 静态白名单 / 深链接 / AI 重试 / 龙头串号 / 换号清理 / paper 负 ID）
-2. 安全加固 + 文案修正 + pages.yml
-3. 拆 server.py + 搭测试框架
+1. 拆 server.py（2420 行）按职责分模块，保持接口不变
+2. 搭基础接口测试框架（pytest + 关键路由冒烟）
+3. 全量回归 + 决定云端同步时点
 
 ## 待决策
 - 云端同步时点：推荐验证全过后一次性上线（用户未答，按此执行）
