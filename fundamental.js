@@ -51,6 +51,20 @@
   function f1(x) { return (x === null || !isFinite(x)) ? '—' : Number(x).toFixed(1); }
   function f2(x) { return (x === null || !isFinite(x)) ? '—' : Number(x).toFixed(2); }
   function sgn(x, d) { return (x === null || !isFinite(x)) ? '—' : (x > 0 ? '+' : '') + Number(x).toFixed(d === undefined ? 1 : d); }
+  /* 主营结构变化的结论必须跟着实际方向走。
+     以前无论毛利率涨跌都写「量与价同时上行」，会对毛利率下滑的公司
+     给出完全错误的判断。这里按占比/毛利率的升降组合分别表述。 */
+  function mixConclusion(B) {
+    var ratioUp = B.topProduct.ratio > B.topPrev.ratio;
+    var grossUp = B.grossJump > 0;
+    var grossFlat = B.grossJump === null || Math.abs(B.grossJump) < 0.05;
+    if (ratioUp && grossUp) return '占比与毛利率同时提升，是本期业绩改善的主要来源。';
+    if (ratioUp && grossFlat) return '占比提升但毛利率基本持平，增长主要靠规模而非结构改善。';
+    if (ratioUp) return '占比虽提升，但毛利率下滑 ' + Math.abs(B.grossJump).toFixed(1) + ' 个百分点，需留意盈利质量。';
+    if (!ratioUp && grossUp) return '占比回落但毛利率提升，产品结构在优化，收入贡献短期减弱。';
+    if (!ratioUp && grossFlat) return '占比小幅回落，毛利率稳定，业务结构基本维持。';
+    return '占比与毛利率同时回落，该业务对本期业绩的拉动在减弱。';
+  }
   function yi(x) {
     if (x === null || !isFinite(x)) return '—';
     var v = x / 1e8;
@@ -165,12 +179,15 @@
       if (c === code) me = r;
       if (n(r.TMC_RANK) > 0) list.push(r);
     });
+    var isSelf = !!me;
     if (!me && avg) {
-      // 有些股票不出现在排行榜行里，用行业均值行兜底取行业信息
+      /* 排行榜里找不到自己时，行业名/家数仍可从均值行取，
+         但绝不能把均值行当成本公司——那会让「营收是行业均值的 N 倍」
+         恒等于 1.0 倍，是赤裸裸的假数据。用 isSelf 标记区分。 */
       me = avg;
     }
     var num = n(me && me.STOCK_NUM) || (list.length || 1);
-    return { avg: avg, me: me, list: list, num: num, name: (me || {}).INDUSTRY_NAME || '' };
+    return { avg: avg, me: me, isSelf: isSelf, list: list, num: num, name: (me || {}).INDUSTRY_NAME || '' };
   }
 
   function parseHolders(rows) {
@@ -258,9 +275,11 @@
     /* ---- 行业地位 ---- */
     var ind = { name: rk ? rk.name : (A.quote.industry || '—'), num: rk ? rk.num : null, me: rk && rk.me, avg: rk && rk.avg };
     var rankCap = n(ind.me && ind.me.TMC_RANK), rankRev = n(ind.me && ind.me.TOI_RANK), rankProfit = n(ind.me && ind.me.NETPROFIT_RANK);
-    var revMultiple = (ind.avg && n(ind.me.TOTAL_OPERATE_INCOME) && n(ind.avg.TOTAL_OPERATE_INCOME)) ?
+    /* 只有真的在排行榜里找到本公司，才算与行业均值的倍数；
+       拿均值行兜底时 isSelf=false，倍数留空而不是显示假的 1.0 倍。 */
+    var revMultiple = (rk && rk.isSelf && ind.avg && n(ind.me.TOTAL_OPERATE_INCOME) && n(ind.avg.TOTAL_OPERATE_INCOME)) ?
       n(ind.me.TOTAL_OPERATE_INCOME) / n(ind.avg.TOTAL_OPERATE_INCOME) : null;
-    var profitMultiple = (ind.avg && n(ind.me.NETPROFIT) && n(ind.avg.NETPROFIT)) ?
+    var profitMultiple = (rk && rk.isSelf && ind.avg && n(ind.me.NETPROFIT) && n(ind.avg.NETPROFIT)) ?
       n(ind.me.NETPROFIT) / n(ind.avg.NETPROFIT) : null;
 
     /* ---- 治理 ---- */
@@ -469,7 +488,13 @@
     }
     if (!head.length) head.push('公开数据里暂无明确逆风信号，但仍需关注行业整体景气变化。');
 
-    verify.push('下一份财报的毛利率能否守住 ' + f1(n(A.gross) || 0) + '%（当前值），这是判断本轮盈利是不是周期高点的第一指标。');
+    /* 金融股（银行/保险/券商）没有通常意义上的毛利率，
+       以前照样输出「毛利率能否守住 0.0%」这种外行话。 */
+    if (!A.isFin) {
+      verify.push('下一份财报的毛利率能否守住 ' + f1(n(A.gross) || 0) + '%（当前值），这是判断本轮盈利是不是周期高点的第一指标。');
+    } else {
+      verify.push('下一份财报的净息差 / 承保利润与资产质量变化：金融股的盈利周期看利差和减值，不看毛利率。');
+    }
     if (topProduct) verify.push('「' + topProduct.name + '」的营收占比与单价走势：占比若从 ' + f1(topRatio) + '% 回落，说明结构在改善；若继续升，说明依赖加深。');
     verify.push('股东户数是否见顶回落（当前 ' + wan(hn.length ? hn[0].num : null) + '户）：户数停止增长通常是筹码重新集中的先行信号。');
     verify.push('经营现金流 / 净利润能否回到 1 以上（当前 ' + f2(A.cashCover) + '），验证利润的含金量。');
@@ -594,7 +619,7 @@
           f1(B.topPrev.ratio) + '% → ' + f1(B.topProduct.ratio) + '%，毛利率 ' +
           f1(B.topPrev.gross) + '% → ' + f1(B.topProduct.gross) + '%' +
           (B.grossJump !== null ? '（' + sgn(B.grossJump, 1) + ' pct）' : '') +
-          '。量与价同时上行，是本期业绩爆发的主要来源。</div>';
+          '。' + mixConclusion(B) + '</div>';
       }
     }
     parts.push(faSec('公司做什么', '业务与主营构成', p1));
@@ -616,7 +641,7 @@
     if (o.ADDRESS && /北京|上海|深圳|广州|杭州|苏州|合肥|西安|成都|南京|武汉|无锡/.test(o.ADDRESS)) {
       p2 += '<div class="fa-insight">注册与办公所在地为' +
         esc(String(o.ADDRESS).match(/北京|上海|深圳|广州|杭州|苏州|合肥|西安|成都|南京|武汉|无锡/)[0]) +
-        '，属于国内半导体 / 电子产业的主要集聚区之一，人才与供应链配套相对完整。</div>';
+        '，该城市产业配套与人才供给相对集中（具体优势行业需结合公司主营业务判断）。</div>';
     }
     parts.push(faSec('公司位置与联系', '注册地、办公地、中介机构', p2));
 

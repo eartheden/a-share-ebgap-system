@@ -1,8 +1,11 @@
-name: Deploy to GitHub Pages
+name: Deploy to GitHub Pages (legacy · 手动)
 
+# ⚠️ 已废弃自动发布：这个站早已不是纯前端。
+# 登录门 / RBAC / 行情代理 / 虚拟持仓 API 全部依赖 server.py，
+# 纯静态托管会把访客卡在登录页（/api/auth/me 404），不可用。
+# 线上发布走 workbuddy_sites_deploy（带 Python 后端），不走这里。
+# 保留本文件仅为历史回溯，故移除 push 自动触发，只留手动。
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
