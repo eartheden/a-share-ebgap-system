@@ -870,6 +870,7 @@ def db_init():
                 score REAL,
                 board_num INTEGER DEFAULT 1,
                 board_known INTEGER DEFAULT 0,
+                flag TEXT DEFAULT 'pick',
                 reason TEXT,
                 created_at TEXT DEFAULT (datetime('now','localtime')),
                 UNIQUE(date, user_id, code)
@@ -1714,16 +1715,22 @@ def dragon_snapshot(user_id):
         if 20 <= (item.get('fcap') or 0) <= 200: reasons.append('中小盘易连板')
         if board_known and bn > 1: reasons.append('%d 连板' % bn)
         if sec_map.get(item.get('ind'), 0) >= 3: reasons.append('板块联动')
+        # 主力净流出却涨停 → 明确标风险，不让用户以为是漏数据
+        if (item.get('inflow') or 0) <= 0: reasons.append('主力净流出·封板质量差')
         picks.append({
             'code': code, 'name': item.get('name'), 'ind': item.get('ind'),
             'price': item.get('price'), 'pct': item.get('pct'),
             'turnover': item.get('turnover'), 'fcap': item.get('fcap'),
             'amount': item.get('amount'), 'inflow': item.get('inflow'),
             'score': sc, 'board_num': bn, 'board_known': board_known,
+            'flag': 'risk' if (item.get('inflow') or 0) <= 0 else 'pick',
             'reason': '、'.join(reasons[:4]) or ('首板' if board_known else '连板待确认'),
         })
     picks.sort(key=lambda x: -x['score'])
-    picks = picks[:10]                        # 只留前 10，清单才有决策价值
+    # 优选取评分前 10；净流出的风险票另外全留（即使分低也要让用户看见）。
+    normal = [p for p in picks if p['flag'] == 'pick'][:10]
+    risk = [p for p in picks if p['flag'] == 'risk']
+    picks = normal + risk
 
     max_board = max([p['board_num'] for p in picks] or [1])
     board_ok = any(p.get('board_known') for p in picks)
@@ -1756,11 +1763,12 @@ def dragon_snapshot(user_id):
         for p in picks:
             c.execute('''INSERT INTO zt_picks
                 (date, user_id, code, name, ind, price, pct, turnover, fcap,
-                 amount, inflow, score, board_num, board_known, reason)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
+                 amount, inflow, score, board_num, board_known, flag, reason)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
                 today, user_id, p['code'], p['name'], p['ind'], p['price'],
                 p['pct'], p['turnover'], p['fcap'], p['amount'], p['inflow'],
-                p['score'], p['board_num'], 1 if p.get('board_known') else 0, p['reason']))
+                p['score'], p['board_num'], 1 if p.get('board_known') else 0,
+                p.get('flag','pick'), p['reason']))
         c.commit()
 
     return {'ok': True, 'date': today, 'emotion': emotion,

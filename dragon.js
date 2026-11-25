@@ -163,23 +163,31 @@
       return;
     }
     if (meta) meta.textContent = S.picks.length + ' 只 · 按分数排序';
-    box.innerHTML = '<table class="dg-table"><thead><tr>' +
-      '<th>评分</th><th>名称 / 代码</th><th>连板</th><th>涨幅</th><th>换手</th><th>资金流</th><th>入选理由</th><th></th>' +
-      '</tr></thead><tbody>' + S.picks.map(function (p) {
+    function rowHtml(p) {
       var sc = Number(p.score) || 0;
       var cls = sc >= 70 ? 'high' : (sc >= 55 ? 'mid' : 'low');
-      return '<tr>' +
-        '<td><span class="dg-score ' + cls + '">' + fx(sc, 0) + '</span></td>' +
+      var risk = p.flag === 'risk';
+      return '<tr' + (risk ? ' class="dg-risk-row"' : '') + '>' +
+        '<td><span class="dg-score ' + (risk ? 'low' : cls) + '">' + fx(sc, 0) + '</span></td>' +
         '<td><b>' + esc(p.name) + '</b><br><span class="dg-code">' + esc(p.code) + '</span></td>' +
         '<td>' + (p.board_known ? (p.board_num > 1 ? '<span class="dg-board">' + p.board_num + ' 板</span>' : '首板')
           : '<span class="dg-unknown" title="历史样本不足，无法判断是否连板">未知</span>') + '</td>' +
         '<td class="dg-up">' + pct(p.pct) + '</td>' +
         '<td>' + fx(p.turnover, 1) + '%</td>' +
-        '<td>' + fx(p.inflow, 2) + ' 亿</td>' +
+        '<td class="' + (risk ? 'dg-out' : '') + '">' + fx(p.inflow, 2) + ' 亿</td>' +
         '<td class="dg-reason">' + esc(p.reason) + '</td>' +
         '<td><button class="dg-btn mini" data-code="' + esc(p.code) + '">虚拟买入</button></td>' +
         '</tr>';
-    }).join('') + '</tbody></table>';
+    }
+    var head = '<table class="dg-table"><thead><tr>' +
+      '<th>评分</th><th>名称 / 代码</th><th>连板</th><th>涨幅<sup title="低价股按分取整，实际涨幅可能略超 10%">?</sup></th>' +
+      '<th>换手</th><th>主力资金</th><th>入选理由</th><th></th></tr></thead><tbody>';
+    var picks = S.picks.filter(function (p) { return p.flag !== 'risk'; });
+    var risks = S.picks.filter(function (p) { return p.flag === 'risk'; });
+    box.innerHTML = head + picks.map(rowHtml).join('') + '</tbody></table>' +
+      (risks.length ? '<div class="dg-risk-title">另：涨停但主力净流出（' + risks.length +
+        ' 只，不建议追）</div><table class="dg-table"><tbody>' +
+        risks.map(rowHtml).join('') + '</tbody></table>' : '');
 
     box.querySelectorAll('[data-code]').forEach(function (b) {
       b.addEventListener('click', function () {

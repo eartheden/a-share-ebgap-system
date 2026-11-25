@@ -93,6 +93,13 @@
 .dg-score.low { background: var(--side2); color: var(--ink3); }
 .dg-board { color: #F09595; font-weight: 500; }
 .dg-unknown { color: var(--ink3); border-bottom: 1px dotted var(--ink3); cursor: help; }
+.dg-table th sup { color: var(--ink3); font-size: 9px; cursor: help; }
+.dg-out { color: #F09595; }
+.dg-risk-row { background: rgba(240,149,149,.04); }
+.dg-risk-title {
+  padding: 10px 9px 6px; font-size: 11px; color: var(--ink3);
+  border-top: 1px solid var(--line); margin-top: 4px;
+}
 .dg-up { color: #ff6b81; font-weight: 500; }
 .dg-reason { font-size: 10.5px; color: var(--ink3); max-width: 260px; line-height: 1.5; }
 .dg-empty { margin: 0; padding: 22px 0; text-align: center; color: var(--ink3); font-size: 12px; }
