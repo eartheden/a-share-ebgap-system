@@ -149,7 +149,10 @@
         gate.hidden = true;
         document.body.classList.remove('auth-locked');
         applyUser();
-        if (window.EB_APP && EB_APP.show) EB_APP.show('overview');
+        /* 尊重 URL 锚点：直接打开 /#dragon 这类深链接时，登录后应该回到那个页面，
+           而不是被硬拽回总览。权限由 eb:view 守卫统一兜底。 */
+        var target = (location.hash || '').replace('#', '').split('=')[0];
+        if (window.EB_APP && EB_APP.show) EB_APP.show(target || 'overview');
       })
       .catch(function (e) {
         msg.className = 'auth-msg';

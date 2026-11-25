@@ -869,6 +869,7 @@ def db_init():
                 inflow REAL,
                 score REAL,
                 board_num INTEGER DEFAULT 1,
+                board_known INTEGER DEFAULT 0,
                 reason TEXT,
                 created_at TEXT DEFAULT (datetime('now','localtime')),
                 UNIQUE(date, user_id, code)
@@ -1659,60 +1660,84 @@ def dragon_snapshot(user_id):
     for d in sectors:
         sec_map[d.get('name')] = d.get('lu') or 0
 
-    # 连板数推断：查这只票最近连续几天出现在涨停名单里
+    # 连板数推断：查这只票历史上连续几天出现在候选名单里。
+    # 注意必须排除今天——今天正在生成，库里若有也是上次生成的残留，
+    # 算进去会让连板数虚高。
+    from datetime import date as _date, timedelta
+    try:
+        yesterday = (_date.fromisoformat(today) - timedelta(days=1)).isoformat()
+    except Exception:
+        yesterday = ''
     with db_conn() as c:
         recent = {}
         for r in c.execute('''
-            SELECT code, date FROM zt_picks WHERE date <= ?
+            SELECT code, date FROM zt_picks WHERE date < ?
             ORDER BY date DESC
         ''', (today,)).fetchall():
             recent.setdefault(r['code'], []).append(r['date'])
+        # 有几天历史存档（决定能不能做推断）
+        history_days = c.execute('SELECT COUNT(DISTINCT date) FROM zt_daily WHERE date < ?',
+                                 (today,)).fetchone()[0]
 
     def board_of(code):
+        """返回 (连板数, 是否可信)。历史不足时返回 (1, False)，
+        UI 必须显示「未知」而不是「首板」——没数据不等于首板。"""
         days = recent.get(code) or []
-        # 只认自然日连续（跳过周末由数据本身决定：没落库的天就断）
-        n = 1
-        for i, d in enumerate(days):
-            # days 是倒序，检查是不是紧邻的昨天
-            from datetime import date as _date, timedelta
+        if not days or not history_days:
+            return 1, False
+        # days 倒序；只有最近一条恰好是昨天，才能接续推断
+        if days[0] != yesterday:
+            return 1, False
+        n = 2
+        cur = yesterday
+        for d in days[1:]:
             try:
-                cur = _date.fromisoformat(d)
-                prev = cur - timedelta(days=1)
-                if i + 1 < len(days) and _date.fromisoformat(days[i + 1]) == prev:
-                    n += 1
-                else:
-                    break
+                prev = (_date.fromisoformat(cur) - timedelta(days=1)).isoformat()
             except Exception:
                 break
-        return min(n, 12)
+            if d == prev:
+                n += 1; cur = d
+            else:
+                break
+        return min(n, 12), True
 
     picks = []
     for item in lu:
         code = item.get('code')
         if not code:
             continue
-        bn = board_of(code)
+        bn, board_known = board_of(code)
         sc = dragon_score(item, bn, sec_map.get(item.get('ind'), 0))
         reasons = []
         if (item.get('inflow') or 0) >= 1: reasons.append('资金净流入靠前')
         if 3 <= (item.get('turnover') or 0) <= 20: reasons.append('换手健康')
         if 20 <= (item.get('fcap') or 0) <= 200: reasons.append('中小盘易连板')
-        if bn > 1: reasons.append('%d 连板' % bn)
+        if board_known and bn > 1: reasons.append('%d 连板' % bn)
         if sec_map.get(item.get('ind'), 0) >= 3: reasons.append('板块联动')
         picks.append({
             'code': code, 'name': item.get('name'), 'ind': item.get('ind'),
             'price': item.get('price'), 'pct': item.get('pct'),
             'turnover': item.get('turnover'), 'fcap': item.get('fcap'),
             'amount': item.get('amount'), 'inflow': item.get('inflow'),
-            'score': sc, 'board_num': bn, 'reason': '、'.join(reasons[:4]) or '首板',
+            'score': sc, 'board_num': bn, 'board_known': board_known,
+            'reason': '、'.join(reasons[:4]) or ('首板' if board_known else '连板待确认'),
         })
     picks.sort(key=lambda x: -x['score'])
     picks = picks[:10]                        # 只留前 10，清单才有决策价值
 
     max_board = max([p['board_num'] for p in picks] or [1])
-    emotion = dragon_emotion_label(
-        payload.get('limitUp') or 0, payload.get('limitDown') or 0,
-        max_board, payload.get('upRatio') or 0)
+    board_ok = any(p.get('board_known') for p in picks)
+    # 连板不可信时，不能拿恒为 1 的 max_board 去判情绪，否则永远判成「冰点」。
+    # 这种时候只用涨停家数 / 跌停家数 / 涨跌比来判，宁可粗略也不误导。
+    if board_ok:
+        emotion = dragon_emotion_label(
+            payload.get('limitUp') or 0, payload.get('limitDown') or 0,
+            max_board, payload.get('upRatio') or 0)
+    else:
+        lu_n = payload.get('limitUp') or 0
+        ld_n = payload.get('limitDown') or 0
+        emotion = '冰点' if lu_n < 20 else ('启动' if lu_n < 40 else ('发酵' if lu_n < 70 else '高潮'))
+        if ld_n > 20: emotion = '退潮'
 
     with db_conn() as c:
         c.execute('''INSERT OR REPLACE INTO zt_daily
@@ -1731,11 +1756,11 @@ def dragon_snapshot(user_id):
         for p in picks:
             c.execute('''INSERT INTO zt_picks
                 (date, user_id, code, name, ind, price, pct, turnover, fcap,
-                 amount, inflow, score, board_num, reason)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
+                 amount, inflow, score, board_num, board_known, reason)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
                 today, user_id, p['code'], p['name'], p['ind'], p['price'],
                 p['pct'], p['turnover'], p['fcap'], p['amount'], p['inflow'],
-                p['score'], p['board_num'], p['reason']))
+                p['score'], p['board_num'], 1 if p.get('board_known') else 0, p['reason']))
         c.commit()
 
     return {'ok': True, 'date': today, 'emotion': emotion,

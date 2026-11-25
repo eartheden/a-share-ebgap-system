@@ -104,7 +104,8 @@
       kpi('最高连板', m.max_board != null ? m.max_board + ' 板' : '—') +
       kpi('两市成交', m.amount != null ? fx(m.amount, 0) + ' 亿' : '—');
     var nowTag = $('dg-emotion-now');
-    if (nowTag) nowTag.textContent = S.meta ? (S.meta.date + ' 生成') : (S.series[0] ? S.series[0].date : '暂无数据');
+    if (nowTag) nowTag.textContent = S.meta ? (S.meta.date + ' 生成')
+      : (S.series[0] ? S.series[0].date + ' 存档' : '暂无数据');
 
     paintEmotion();
     paintTrend();
@@ -132,16 +133,25 @@
   function paintTrend() {
     var box = $('dg-trend'); if (!box) return;
     var arr = S.series.slice().reverse();
-    if (!arr.length) { box.innerHTML = '<p class="dg-empty">还没有数据，点「生成今日清单」开始累积</p>'; return; }
+    /* 样本不足时不画柱状图：一天的数据拉成满屏色块，既丑又传达不了趋势信息。
+       少于 3 天明确告诉用户还差几天，比画一根柱子诚实。 */
+    if (arr.length < 3) {
+      box.innerHTML = '<div class="dg-trend-empty"><b>样本累积中 · ' + arr.length + ' / 3 天</b>' +
+        '每天收盘后点一次「生成今日清单」，攒够 3 天开始显示趋势</div>';
+      return;
+    }
     var color = { '冰点': '#85B7EB', '启动': '#5DCAA5', '发酵': '#FAC775', '高潮': '#F09595', '退潮': '#B4B2A9' };
     var max = Math.max.apply(null, arr.map(function (d) { return d.limit_up || 0; }).concat([1]));
-    box.innerHTML = '<div class="dg-bars">' + arr.map(function (d) {
-      var h = Math.round((d.limit_up || 0) / max * 100);
-      return '<div class="dg-bar-wrap" title="' + esc(d.date) + ' · 涨停 ' + (d.limit_up || 0) +
-        ' · ' + esc(d.emotion || '') + '"><div class="dg-bar" style="height:' + Math.max(4, h) + '%;background:' +
-        (color[d.emotion] || '#888780') + '"></div></div>';
-    }).join('') + '</div><div class="dg-trend-foot"><span>' + esc(arr[0].date) +
-      '</span><span>涨停家数 · 颜色代表情绪阶段</span><span>' + esc(arr[arr.length - 1].date) + '</span></div>';
+    box.innerHTML = '<div>' +
+      '<div class="dg-bars">' + arr.map(function (d) {
+        var h = Math.round((d.limit_up || 0) / max * 100);
+        return '<div class="dg-bar-wrap" title="' + esc(d.date) + ' · 涨停 ' + (d.limit_up || 0) +
+          ' · ' + esc(d.emotion || '') + '"><div class="dg-bar" style="height:' + Math.max(4, h) + '%;background:' +
+          (color[d.emotion] || '#888780') + '"></div></div>';
+      }).join('') + '</div>' +
+      '<div class="dg-trend-foot"><span>' + esc(arr[0].date) +
+      '</span><span>涨停家数 · 颜色=情绪阶段</span><span>' + esc(arr[arr.length - 1].date) + '</span></div>' +
+      '</div>';
   }
 
   function paintPicks() {
@@ -161,7 +171,8 @@
       return '<tr>' +
         '<td><span class="dg-score ' + cls + '">' + fx(sc, 0) + '</span></td>' +
         '<td><b>' + esc(p.name) + '</b><br><span class="dg-code">' + esc(p.code) + '</span></td>' +
-        '<td>' + (p.board_num > 1 ? '<span class="dg-board">' + p.board_num + ' 板</span>' : '首板') + '</td>' +
+        '<td>' + (p.board_known ? (p.board_num > 1 ? '<span class="dg-board">' + p.board_num + ' 板</span>' : '首板')
+          : '<span class="dg-unknown" title="历史样本不足，无法判断是否连板">未知</span>') + '</td>' +
         '<td class="dg-up">' + pct(p.pct) + '</td>' +
         '<td>' + fx(p.turnover, 1) + '%</td>' +
         '<td>' + fx(p.inflow, 2) + ' 亿</td>' +
