@@ -1257,15 +1257,29 @@
     saveLocal();
     render();
 
+    function dropTemp() {
+      /* 服务端拒绝了（重复/失败）就必须立刻撤掉本地临时记录。
+         以前留着那条负 ID，用户会看到一笔无法操作的假持仓，
+         要等下一次 tick 才被静默抹掉。 */
+      var i = S.trades.findIndex(function (x) { return x.id === t.id; });
+      if (i >= 0) S.trades.splice(i, 1);
+      saveLocal();
+    }
     apiPost('/api/paper/buy', toServer(t)).then(function (res) {
       if (res && res.ok && res.trade && !res.duplicate) {
         var idx = S.trades.findIndex(function (x) { return x.id === t.id; });
         if (idx >= 0) S.trades[idx] = fromServer(res.trade);
         saveLocal();
+      } else {
+        dropTemp();
+        toast(res && res.error ? res.error : '服务端未接受这笔买入，已撤销', 'bad');
       }
       render();
       if (opts.onDone) opts.onDone();
-    }).catch(function () {
+    }).catch(function (e) {
+      dropTemp();
+      toast('买入失败，已撤销：' + (e && e.message ? e.message : '网络错误'), 'bad');
+      render();
       if (opts.onDone) opts.onDone();
     });
 

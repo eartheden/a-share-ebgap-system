@@ -19,6 +19,15 @@
 
   /* ================= 基础工具 ================= */
 
+  /* HTML 转义：上游字段和报错文案一律经这里再拼进 innerHTML。
+     行情字段名虽来自正规接口，但概念/行业/名称是可变文本，
+     报错信息更可能带尖括号——不转义就是注入口。 */
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
   // 上游数据统一走本机代理 /api/stock/em：
   // 1) 浏览器直连东财会在部分网络（VPN / fake-ip）下整体不可达，代理侧有 DoH 兜底；
   // 2) 实时报价被拦时代理会自动切腾讯源并翻译成东财字段，前端无感知；
@@ -986,11 +995,11 @@
     var head =
       '<div class="sa-head card">' +
       '<div class="sa-head-l">' +
-      '<div class="sa-name">' + q.name + '<span>' + q.code + '</span></div>' +
+      '<div class="sa-name">' + esc(q.name) + '<span>' + esc(q.code) + '</span></div>' +
       '<div class="sa-tags">' +
-      (q.industry ? '<span class="sa-tag">' + q.industry + '</span>' : '') +
-      (q.region ? '<span class="sa-tag ghost">' + q.region + '</span>' : '') +
-      q.concepts.slice(0, 4).map(function (c) { return '<span class="sa-tag ghost">' + c + '</span>'; }).join('') +
+      (q.industry ? '<span class="sa-tag">' + esc(q.industry) + '</span>' : '') +
+      (q.region ? '<span class="sa-tag ghost">' + esc(q.region) + '</span>' : '') +
+      q.concepts.slice(0, 4).map(function (c) { return '<span class="sa-tag ghost">' + esc(c) + '</span>'; }).join('') +
       '</div></div>' +
       '<div class="sa-head-r">' +
       '<div class="sa-price ' + (up >= 0 ? 'up' : 'dn') + '">' + f2(A.price) + '</div>' +
@@ -1375,15 +1384,16 @@
     if (!list.length) { sugHide(); return; }
     box.innerHTML = list.map(function (x, i) {
       // 命中片段高亮，让用户一眼看出为什么匹配上了
-      var name = x.name;
+      var name = String(x.name == null ? '' : x.name);
       var at = kw ? name.toLowerCase().indexOf(kw.toLowerCase()) : -1;
+      // 每段分别转义后再拼 <b>，避免把高亮标签本身转义掉
       var nm = at >= 0
-        ? name.slice(0, at) + '<b>' + name.slice(at, at + kw.length) + '</b>' + name.slice(at + kw.length)
-        : name;
-      return '<button type="button" class="sa-sug-item" data-i="' + i + '" data-code="' + x.code + '">' +
+        ? esc(name.slice(0, at)) + '<b>' + esc(name.slice(at, at + kw.length)) + '</b>' + esc(name.slice(at + kw.length))
+        : esc(name);
+      return '<button type="button" class="sa-sug-item" data-i="' + i + '" data-code="' + esc(x.code) + '">' +
         '<span class="sa-sug-name">' + nm + '</span>' +
-        '<span class="sa-sug-code">' + x.code + '</span>' +
-        '<span class="sa-sug-mkt">' + x.mkt + '</span>' +
+        '<span class="sa-sug-code">' + esc(x.code) + '</span>' +
+        '<span class="sa-sug-mkt">' + esc(x.mkt) + '</span>' +
         '</button>';
     }).join('');
     box.hidden = false;
@@ -1477,10 +1487,10 @@
       '</div>' +
       '<div class="sa-hist-list">' + arr.map(function (x) {
         var cls = (x.chg === null || x.chg === undefined) ? '' : (x.chg >= 0 ? 'up' : 'dn');
-        return '<button type="button" class="sa-hist-item" data-code="' + x.code + '"' +
-          ' title="' + x.name + (x.verdict ? ' · ' + x.verdict : '') + (x.at ? ' · ' + ago(x.at) : '') + '">' +
-          '<span class="sa-hist-name">' + x.name + '</span>' +
-          '<span class="sa-hist-code">' + x.code + '</span>' +
+        return '<button type="button" class="sa-hist-item" data-code="' + esc(x.code) + '"' +
+          ' title="' + esc(x.name + (x.verdict ? ' · ' + x.verdict : '') + (x.at ? ' · ' + ago(x.at) : '')) + '">' +
+          '<span class="sa-hist-name">' + esc(x.name) + '</span>' +
+          '<span class="sa-hist-code">' + esc(x.code) + '</span>' +
           '<span class="sa-hist-chg ' + cls + '">' +
           ((x.chg === null || x.chg === undefined || !isFinite(x.chg)) ? '—' : sgn(x.chg, 2) + '%') +
           '</span>' +
@@ -1501,7 +1511,7 @@
     var el = document.getElementById('sa-error');
     if (!el) return;
     el.hidden = false;
-    el.innerHTML = '<b>分析失败</b><span>' + msg + '</span>';
+    el.innerHTML = '<b>分析失败</b><span>' + esc(msg) + '</span>';
     // 出错时收起上一次的结果，避免错误提示和旧结论同时挂在页面上
     var box = document.getElementById('sa-result');
     if (box) box.hidden = true;
