@@ -200,6 +200,9 @@
   function clearUserData() {
     if (window.EB_PAPER && EB_PAPER.reset) EB_PAPER.reset();
     if (window.EB_AI && EB_AI.reset) EB_AI.reset();
+    /* 龙头战法的候选清单也在内存里（state.picks/series），换号必须清，
+       否则下一位会员会看到上一个人的选股结果。 */
+    if (window.EB_DRAGON && EB_DRAGON.reset) EB_DRAGON.reset();
   }
 
   /* ---------- 会员管理视图（由 app.js 的 RENDER.admin 调用） ---------- */

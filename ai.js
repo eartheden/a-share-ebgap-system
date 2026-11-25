@@ -424,6 +424,10 @@
     reset: function () {
       S.result = null; S.resultFp = null; S.at = null; S.model = '';
       S.usage = null; S.error = null; S.running = false; S.pendingFp = null;
+      /* 关键：booted 也要清。未登录时 mount() 会把 booted 设为 true 但
+         /api/ai/status 返回 401，若不重置，登录后永远不再拉状态，
+         复核面板一直显示「连不上本机 AI 代理」。 */
+      S.booted = false;
     }
   };
 

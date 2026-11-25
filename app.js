@@ -1195,13 +1195,19 @@
     S.view = v;
     RENDER[v]();
     setTimeout(resizeAll, 40);
-    if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
+    /* 保留 #stock=600519 这类带参数的深链接：只替换视图名，不丢掉 =参数。
+       以前直接写 '#'+v 会把 =600519 抹掉，刷新或登录后就打不开那只票。 */
+    var curHash = location.hash.replace('#', '');
+    var curView = curHash.split('=')[0];
+    var suffix = curHash.indexOf('=') >= 0 ? curHash.slice(curHash.indexOf('=')) : '';
+    var wantHash = '#' + v + (curView === v ? suffix : '');
+    if (location.hash !== wantHash) history.replaceState(null, '', wantHash);
     /* 广播当前视图：模块可以据此收尾（paper.js 用它关掉跨页残留的抽屉） */
     document.dispatchEvent(new CustomEvent('eb:view', { detail: { view: v } }));
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
   window.addEventListener('hashchange', function () {
-    var v = location.hash.replace('#', '');
+    var v = location.hash.replace('#', '').split('=')[0];   // #stock=600519 → stock
     if (RENDER[v] && v !== S.view) show(v);
   });
 

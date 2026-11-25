@@ -233,6 +233,11 @@
   window.EB_DRAGON = {
     render: render, enter: enter,
     state: S,
+    reset: function () {
+      S.loaded = false; S.loading = false;
+      S.series = []; S.picks = []; S.meta = null; S.error = null;
+      if (el('dg-trend')) paint();
+    },
     reload: function () { S.loaded = false; load(); }
   };
 })();
