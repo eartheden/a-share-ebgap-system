@@ -253,8 +253,15 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*a, directory=ROOT, **kw)
 
     def log_message(self, fmt, *args):
-        if '/api/' in (args[0] if args else ''):
-            sys.stderr.write('[api] ' + (fmt % args) + '\n')
+        # args[0] 可能是 HTTPStatus 枚举（send_error 走 log_error 时），
+        # 直接 `in` 会抛 TypeError，把请求线程打断，表现为「端口在听但连接空响应」。
+        # 统一转成字符串再判断，并且整段包在 try 里：日志绝不能影响请求处理。
+        try:
+            first = str(args[0]) if args else ''
+            if '/api/' in first:
+                sys.stderr.write('[api] ' + (fmt % args) + '\n')
+        except Exception:
+            pass
 
     def _json(self, obj, code=200):
         # obj 既可以是待序列化的对象，也可以是已编码好的 bytes（上游数据直通，不再二次转换）
@@ -379,6 +386,8 @@ class Handler(SimpleHTTPRequestHandler):
             return 'api.admin.users'
         if path.startswith('/api/market/'):
             return 'api.market'
+        if path.startswith('/api/dragon/'):
+            return 'api.market'
         if path.startswith('/api/stock/'):
             return 'api.stock'
         if path.startswith('/api/paper/'):
@@ -473,6 +482,17 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(stock_suggest_payload(qs))
         if self.path.startswith('/api/paper/list'):
             return self._json({'ok': True, 'trades': paper_list(uid)})
+        if self.path.startswith('/api/dragon/list'):
+            qs = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(qs)
+            date = (params.get('date') or [None])[0]
+            return self._json({'ok': True, 'picks': dragon_list(uid, date)})
+        if self.path.startswith('/api/dragon/emotion'):
+            qs = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(qs)
+            try: days = min(90, max(1, int((params.get('days') or ['30'])[0])))
+            except Exception: days = 30
+            return self._json({'ok': True, 'series': dragon_emotion_series(days)})
         if self.path.startswith('/api/advice/daily') or self.path.startswith('/api/advice/list'):
             qs = urllib.parse.urlparse(self.path).query
             params = urllib.parse.parse_qs(qs)
@@ -573,6 +593,8 @@ class Handler(SimpleHTTPRequestHandler):
             out = call_llm(conf, data)
             return self._json({'ok': True, **out})
 
+        if self.path.startswith('/api/dragon/snapshot'):
+            return self._json(dragon_snapshot(uid))
         if self.path.startswith('/api/paper/buy'):
             return self._json(paper_buy(self._read_json(), uid))
         if self.path.startswith('/api/paper/close'):
@@ -817,6 +839,41 @@ def db_init():
         # 直接 ALTER 比让用户删库重来稳妥。
         _ensure_cols(c, 'paper_trades', [('hz', 'TEXT'), ('note', 'TEXT')])
         c.execute('CREATE INDEX IF NOT EXISTS idx_paper_status ON paper_trades(status)')
+        # 龙头战法：市场情绪快照（全局）+ 每日候选（按用户隔离，虚拟交易是个人行为）
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS zt_daily (
+                date TEXT PRIMARY KEY,
+                limit_up INTEGER DEFAULT 0,
+                limit_down INTEGER DEFAULT 0,
+                up_ratio REAL DEFAULT 0,
+                amount REAL DEFAULT 0,
+                max_board INTEGER DEFAULT 0,
+                board_ladder TEXT,
+                sector_top TEXT,
+                emotion TEXT,
+                created_at TEXT DEFAULT (datetime('now','localtime'))
+            )''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS zt_picks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                name TEXT,
+                ind TEXT,
+                price REAL,
+                pct REAL,
+                turnover REAL,
+                fcap REAL,
+                amount REAL,
+                inflow REAL,
+                score REAL,
+                board_num INTEGER DEFAULT 1,
+                reason TEXT,
+                created_at TEXT DEFAULT (datetime('now','localtime')),
+                UNIQUE(date, user_id, code)
+            )''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_ztpicks_user_date ON zt_picks(user_id, date)')
         c.execute('''
             CREATE TABLE IF NOT EXISTS daily_advice (
                 date TEXT PRIMARY KEY,
@@ -1537,6 +1594,178 @@ def limitup_snapshot_payload():
     }
     _limitup_cache.update({'at': now, 'payload': payload})
     return payload
+
+
+# ============================================================
+# 龙头战法 · 情绪数据落库与选股（纯自有数据，不用外部数据源）
+# ------------------------------------------------------------
+# 数据来自上面的涨停快照；每天收盘后抓一次存进 zt_daily / zt_picks。
+# 连板数没有现成字段，用「该股连续出现在涨停名单的天数」推断——
+# 这是自有数据能做到的最接近版本，宁可保守也不编造。
+# ============================================================
+
+def dragon_emotion_label(lu, ld, max_board, up_ratio):
+    """把当日情绪映射成五阶段之一：冰点/启动/发酵/高潮/退潮。
+    规则是可解释的阈值，不是黑箱；后面样本多了可以调。"""
+    if lu < 15 or max_board <= 2:
+        return '冰点'
+    if lu < 30 and max_board <= 3:
+        return '启动'
+    if lu < 60 and max_board <= 4:
+        return '发酵'
+    if lu >= 80 or max_board >= 6:
+        return '高潮'
+    if ld > 15 or up_ratio < 35:
+        return '退潮'
+    return '发酵'
+
+
+def dragon_score(item, board_num, sector_lu):
+    """首板/连板候选打分（0-100）。因子全是快照里真实存在的字段：
+    资金净流入、换手率、流通盘（小盘更容易连板）、板块联动。
+    封单额拿不到，所以用资金流替代；不做编造。"""
+    s = 40.0
+    inflow = item.get('inflow') or 0          # 亿元
+    turnover = item.get('turnover') or 0      # %
+    fcap = item.get('fcap') or 0              # 亿元
+    if inflow >= 2: s += 20
+    elif inflow >= 1: s += 14
+    elif inflow >= 0.5: s += 9
+    elif inflow > 0: s += 4
+    else: s -= 8                              # 净流出还涨停，封板质量差
+    if 3 <= turnover <= 20: s += 12
+    elif turnover > 30: s -= 6                # 换手过高，分歧大
+    elif turnover < 1: s += 4
+    if 20 <= fcap <= 200: s += 10             # 中小盘优先
+    elif fcap < 20: s += 5
+    elif fcap > 500: s -= 6                   # 大盘股连板难
+    s += min(10, board_num * 3)               # 连板高度加分
+    s += min(8, sector_lu * 2)                # 板块联动加分
+    return round(max(0, min(100, s)), 1)
+
+
+def dragon_snapshot(user_id):
+    """抓一次实时快照 → 算分数 → 落库 → 返回本次结果。
+    供前端「生成今日清单」按钮调用；服务端不主动定时，避免非交易时段空跑。"""
+    payload = limitup_snapshot_payload()
+    if not payload.get('ok'):
+        return {'ok': False, 'error': '行情快照获取失败'}
+    today = time.strftime('%Y-%m-%d', time.localtime())
+    lu = payload.get('list') or []
+    sectors = payload.get('sectors') or []
+
+    # 板块涨停数映射
+    sec_map = {}
+    for d in sectors:
+        sec_map[d.get('name')] = d.get('lu') or 0
+
+    # 连板数推断：查这只票最近连续几天出现在涨停名单里
+    with db_conn() as c:
+        recent = {}
+        for r in c.execute('''
+            SELECT code, date FROM zt_picks WHERE date <= ?
+            ORDER BY date DESC
+        ''', (today,)).fetchall():
+            recent.setdefault(r['code'], []).append(r['date'])
+
+    def board_of(code):
+        days = recent.get(code) or []
+        # 只认自然日连续（跳过周末由数据本身决定：没落库的天就断）
+        n = 1
+        for i, d in enumerate(days):
+            # days 是倒序，检查是不是紧邻的昨天
+            from datetime import date as _date, timedelta
+            try:
+                cur = _date.fromisoformat(d)
+                prev = cur - timedelta(days=1)
+                if i + 1 < len(days) and _date.fromisoformat(days[i + 1]) == prev:
+                    n += 1
+                else:
+                    break
+            except Exception:
+                break
+        return min(n, 12)
+
+    picks = []
+    for item in lu:
+        code = item.get('code')
+        if not code:
+            continue
+        bn = board_of(code)
+        sc = dragon_score(item, bn, sec_map.get(item.get('ind'), 0))
+        reasons = []
+        if (item.get('inflow') or 0) >= 1: reasons.append('资金净流入靠前')
+        if 3 <= (item.get('turnover') or 0) <= 20: reasons.append('换手健康')
+        if 20 <= (item.get('fcap') or 0) <= 200: reasons.append('中小盘易连板')
+        if bn > 1: reasons.append('%d 连板' % bn)
+        if sec_map.get(item.get('ind'), 0) >= 3: reasons.append('板块联动')
+        picks.append({
+            'code': code, 'name': item.get('name'), 'ind': item.get('ind'),
+            'price': item.get('price'), 'pct': item.get('pct'),
+            'turnover': item.get('turnover'), 'fcap': item.get('fcap'),
+            'amount': item.get('amount'), 'inflow': item.get('inflow'),
+            'score': sc, 'board_num': bn, 'reason': '、'.join(reasons[:4]) or '首板',
+        })
+    picks.sort(key=lambda x: -x['score'])
+    picks = picks[:10]                        # 只留前 10，清单才有决策价值
+
+    max_board = max([p['board_num'] for p in picks] or [1])
+    emotion = dragon_emotion_label(
+        payload.get('limitUp') or 0, payload.get('limitDown') or 0,
+        max_board, payload.get('upRatio') or 0)
+
+    with db_conn() as c:
+        c.execute('''INSERT OR REPLACE INTO zt_daily
+            (date, limit_up, limit_down, up_ratio, amount, max_board,
+             board_ladder, sector_top, emotion)
+            VALUES (?,?,?,?,?,?,?,?,?)''', (
+            today, payload.get('limitUp') or 0, payload.get('limitDown') or 0,
+            payload.get('upRatio') or 0, payload.get('amount') or 0,
+            max_board,
+            __import__('json').dumps([{'code': p['code'], 'name': p['name'],
+                                        'board': p['board_num']}
+                                       for p in picks if p['board_num'] > 1], ensure_ascii=False),
+            __import__('json').dumps(sectors[:5], ensure_ascii=False),
+            emotion))
+        c.execute('DELETE FROM zt_picks WHERE date=? AND user_id=?', (today, user_id))
+        for p in picks:
+            c.execute('''INSERT INTO zt_picks
+                (date, user_id, code, name, ind, price, pct, turnover, fcap,
+                 amount, inflow, score, board_num, reason)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
+                today, user_id, p['code'], p['name'], p['ind'], p['price'],
+                p['pct'], p['turnover'], p['fcap'], p['amount'], p['inflow'],
+                p['score'], p['board_num'], p['reason']))
+        c.commit()
+
+    return {'ok': True, 'date': today, 'emotion': emotion,
+            'limit_up': payload.get('limitUp') or 0,
+            'limit_down': payload.get('limitDown') or 0,
+            'up_ratio': payload.get('upRatio') or 0,
+            'amount': payload.get('amount') or 0,
+            'max_board': max_board, 'picks': picks}
+
+
+def dragon_list(user_id, date=None, days=1):
+    """查某个用户的候选清单，默认最近一日。"""
+    with db_conn() as c:
+        if date:
+            rows = c.execute('SELECT * FROM zt_picks WHERE user_id=? AND date=? ORDER BY score DESC',
+                             (user_id, date)).fetchall()
+        else:
+            rows = c.execute('''SELECT * FROM zt_picks WHERE user_id=? AND date >=
+                (SELECT MAX(date) FROM zt_picks WHERE user_id=?) ORDER BY score DESC''',
+                (user_id, user_id)).fetchall()
+        return [{k: r[k] for k in r.keys() if k != 'user_id'} for r in rows]
+
+
+def dragon_emotion_series(days=30):
+    """情绪序列：给看板画趋势用。"""
+    with db_conn() as c:
+        rows = c.execute('''SELECT date, limit_up, limit_down, up_ratio, amount,
+            max_board, emotion, board_ladder FROM zt_daily
+            ORDER BY date DESC LIMIT ?''', (days,)).fetchall()
+    return [{k: r[k] for k in r.keys()} for r in rows]
 
 
 # ---------------- 股票搜索建议（名称 / 拼音 / 代码） ----------------

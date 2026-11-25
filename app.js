@@ -1167,6 +1167,18 @@
     stock: renderStock,
     history: renderHistory,
     limitup: renderLimitUp,
+    dragon: function () {
+      if (window.EB_DRAGON && typeof window.EB_DRAGON.enter === 'function') {
+        window.EB_DRAGON.enter();
+        return;
+      }
+      var v = document.getElementById('v-dragon');
+      if (v && !v.dataset.built) {
+        v.innerHTML = '<div class="card"><div class="card-h"><h2>龙头战法脚本未加载</h2></div>' +
+          '<p class="foot-note">请确认 dragon.js 与 dragon.css 与 index.html 在同一目录，然后刷新页面。</p></div>';
+        v.dataset.built = '1';
+      }
+    },
     admin: function () {
       if (window.EB_AUTH && EB_AUTH.renderAdmin) EB_AUTH.renderAdmin();
       else { var v = document.getElementById('v-admin'); if (v && !v.dataset.built) {

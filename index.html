@@ -6,6 +6,7 @@
 <title>A股股债利差系统 · Equity Bond Gap Terminal</title>
 <link rel="stylesheet" href="style.css?v=24">
 <link rel="stylesheet" href="limitup.css?v=1">
+<link rel="stylesheet" href="dragon.css?v=1">
 <link rel="stylesheet" href="paper.css?v=5">
 <link rel="stylesheet" href="theme.css?v=10">
 <link rel="stylesheet" href="auth.css?v=8">
@@ -31,7 +32,8 @@
     <button class="navi" data-v="stock" data-perm="view.stock"><i>07</i>个股分析</button>
     <button class="navi" data-v="history" data-perm="view.history"><i>08</i>历史复盘</button>
     <button class="navi" data-v="limitup" data-perm="view.limitup"><i>09</i>涨停地图</button>
-    <button class="navi navi-admin" data-v="admin" data-perm="view.admin" hidden><i>10</i>会员管理</button>
+    <button class="navi" data-v="dragon" data-perm="view.dragon"><i>10</i>龙头战法</button>
+    <button class="navi navi-admin" data-v="admin" data-perm="view.admin" hidden><i>11</i>会员管理</button>
   </nav>
   <div class="user-bar" id="user-bar" hidden>
     <span class="user-avatar" id="user-avatar">—</span>
@@ -403,6 +405,9 @@
 <!-- ============ 09 涨停地图 ============ -->
 <section class="view" id="v-limitup"></section>
 
+<!-- ============ 10.5 龙头战法 ============ -->
+<section class="view" id="v-dragon"></section>
+
 <!-- ============ 10 会员管理（仅管理员） ============ -->
 <section class="view" id="v-admin"></section>
 
@@ -439,6 +444,7 @@
 <script src="fundamental.js?v=8"></script>
 <script src="picker.js?v=22"></script>
 <script src="paper.js?v=7"></script>
+<script src="dragon.js?v=1"></script>
 <script src="ai.js?v=6"></script>
 <script src="limitup.js?v=2"></script>
 <script src="app.js?v=26"></script>

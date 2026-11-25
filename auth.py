@@ -40,6 +40,7 @@ PERMISSIONS = [
     ('view.stock', '个股分析', 'view'),
     ('view.history', '历史复盘', 'view'),
     ('view.limitup', '涨停地图', 'view'),
+    ('view.dragon', '龙头战法', 'view'),
     ('view.admin', '会员管理', 'view'),
     # 业务 API
     ('api.market', '行情数据', 'api'),
@@ -57,7 +58,7 @@ DEFAULT_ROLE_PERMS = {
     'admin': [p[0] for p in PERMISSIONS],
     'member': [
         'view.overview', 'view.curve', 'view.signal', 'view.alloc',
-        'view.pick', 'view.paper', 'view.stock', 'view.history', 'view.limitup',
+        'view.pick', 'view.paper', 'view.stock', 'view.history', 'view.limitup', 'view.dragon',
         'api.market', 'api.stock', 'api.paper', 'api.advice', 'api.ai',
     ],
 }

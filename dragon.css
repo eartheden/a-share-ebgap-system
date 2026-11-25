@@ -1,0 +1,77 @@
+/* ============================================================
+   龙头战法模块样式 · 沿用主题变量（深色科技风）
+   ============================================================ */
+.dg-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+.dg-head h1 { margin: 0; font-size: 20px; font-weight: 500; color: var(--ink); }
+.dg-sub { margin: 6px 0 0; font-size: 12px; color: var(--ink3); }
+.dg-btn {
+  padding: 8px 15px; border-radius: 8px; cursor: pointer; font-size: 12.5px;
+  background: transparent; border: 1px solid var(--line); color: var(--ink2);
+}
+.dg-btn:hover { color: var(--ink); border-color: var(--acc); }
+.dg-btn.main { background: var(--acc); border-color: transparent; color: #061020; font-weight: 600; }
+.dg-btn.main:disabled { opacity: .6; cursor: default; }
+.dg-btn.mini { padding: 5px 10px; font-size: 11px; }
+.dg-note {
+  padding: 10px 13px; margin-bottom: 14px; border-radius: 8px;
+  background: var(--side2); border: 1px solid var(--line);
+  font-size: 11.5px; line-height: 1.7; color: var(--ink3);
+}
+.dg-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.dg-kpi {
+  padding: 14px 16px; border-radius: 10px;
+  background: var(--card); border: 1px solid var(--line);
+}
+.dg-kpi i { display: block; font-style: normal; font-size: 11.5px; color: var(--ink3); margin-bottom: 7px; }
+.dg-kpi b { font-size: 22px; font-weight: 500; color: var(--ink); }
+.dg-kpi.ice b { color: #85B7EB; }
+.dg-kpi.start b { color: #5DCAA5; }
+.dg-kpi.ferment b { color: #FAC775; }
+.dg-kpi.peak b { color: #F09595; }
+.dg-kpi.ebb b { color: #B4B2A9; }
+.dg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.dg-card { padding: 16px 18px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); }
+.dg-card-h { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+.dg-card-h h2 { margin: 0; font-size: 14px; font-weight: 500; color: var(--ink); }
+.dg-card-h span { font-size: 11px; color: var(--ink3); }
+.dg-emotion { display: flex; gap: 6px; }
+.dg-stage {
+  flex: 1; padding: 11px 6px; border-radius: 8px; text-align: center;
+  background: var(--side2); border: 1px solid var(--line); opacity: .45;
+}
+.dg-stage.past { opacity: .75; }
+.dg-stage.on { opacity: 1; border-color: var(--acc); box-shadow: inset 0 -2px 0 var(--acc); }
+.dg-stage b { display: block; font-size: 13px; font-weight: 500; color: var(--ink); }
+.dg-stage span { display: block; font-size: 10.5px; color: var(--ink3); margin-top: 5px; }
+.dg-stage.ice b { color: #85B7EB; }
+.dg-stage.start b { color: #5DCAA5; }
+.dg-stage.ferment b { color: #FAC775; }
+.dg-stage.peak b { color: #F09595; }
+.dg-stage.ebb b { color: #B4B2A9; }
+.dg-trend { min-height: 110px; }
+.dg-bars { display: flex; align-items: flex-end; gap: 2px; height: 92px; }
+.dg-bar-wrap { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+.dg-bar { width: 100%; border-radius: 2px 2px 0 0; opacity: .85; }
+.dg-trend-foot { display: flex; justify-content: space-between; margin-top: 8px; font-size: 10.5px; color: var(--ink3); }
+.dg-picks { overflow-x: auto; }
+.dg-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.dg-table th {
+  text-align: left; padding: 9px 10px; color: var(--ink3); font-weight: 400; font-size: 11px;
+  border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.dg-table td { padding: 11px 10px; border-bottom: 1px solid var(--line2); color: var(--ink2); vertical-align: middle; }
+.dg-table tr:last-child td { border-bottom: 0; }
+.dg-table td b { color: var(--ink); font-weight: 500; }
+.dg-code { font-family: var(--mono, monospace); font-size: 11px; color: var(--ink3); }
+.dg-score { display: inline-block; min-width: 34px; text-align: center; padding: 4px 6px; border-radius: 6px; font-weight: 600; }
+.dg-score.high { background: rgba(240,149,149,.15); color: #F09595; }
+.dg-score.mid { background: rgba(250,199,117,.15); color: #FAC775; }
+.dg-score.low { background: var(--side2); color: var(--ink3); }
+.dg-board { color: #F09595; font-weight: 500; }
+.dg-up { color: #ff6b81; }
+.dg-reason { font-size: 11px; color: var(--ink3); max-width: 240px; }
+.dg-empty { margin: 0; padding: 26px 0; text-align: center; color: var(--ink3); font-size: 12.5px; }
+@media (max-width: 1000px) {
+  .dg-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dg-grid { grid-template-columns: 1fr; }
+}
